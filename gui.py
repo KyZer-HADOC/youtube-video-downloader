@@ -1,192 +1,412 @@
 #!/usr/bin/env python3
-"""
-YouTube Video Downloader GUI
-A graphical interface for downloading YouTube videos
-"""
+"""KyZer Downloader - desktop GUI for yt-dlp."""
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from pathlib import Path
+from __future__ import annotations
+
+import queue
 import threading
+from pathlib import Path
+from urllib.parse import urlsplit
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
 from downloader import YouTubeDownloader
 
 
-class YouTubeDownloaderGUI:
-    """GUI for YouTube video downloader"""
-    
-    def __init__(self, root):
+class KyZerDownloaderApp:
+    BG = "#101116"
+    HEADER = "#171820"
+    PANEL = "#1b1d26"
+    INPUT = "#252833"
+    TEXT = "#f4f5f7"
+    MUTED = "#9da2b0"
+    ACCENT = "#ff465c"
+    GREEN = "#39d98a"
+
+    def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("YouTube Video Downloader")
-        self.root.geometry("600x500")
-        self.root.resizable(False, False)
-        
-        self.downloader = None
-        self.downloading = False
-        
-        self.setup_ui()
-    
-    def setup_ui(self):
-        """Setup the GUI components"""
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Title
-        title_label = ttk.Label(
-            main_frame,
-            text="YouTube Video Downloader",
-            font=("Helvetica", 16, "bold")
+        self.root.title("KyZer Downloader")
+        self.root.geometry("760x700")
+        self.root.minsize(650, 640)
+        self.root.configure(bg=self.BG)
+
+        self.events: queue.Queue[tuple] = queue.Queue()
+        self.is_downloading = False
+        self.closing = False
+
+        self.url_var = tk.StringVar()
+        self.folder_var = tk.StringVar(value=str(Path.home() / "Downloads"))
+        self.quality_var = tk.StringVar(value="Best quality")
+        self.status_var = tk.StringVar(value="Ready when you are")
+        self.progress_text_var = tk.StringVar(value="0%")
+
+        self._configure_styles()
+        self._build_interface()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.after(100, self._process_events)
+
+    def _configure_styles(self) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure(
+            "KyZer.Horizontal.TProgressbar",
+            troughcolor=self.INPUT, background=self.ACCENT,
+            bordercolor=self.INPUT, lightcolor=self.ACCENT,
+            darkcolor=self.ACCENT, thickness=10,
         )
-        title_label.grid(row=0, column=0, columnspan=2, pady=10)
-        
-        # URL Input
-        ttk.Label(main_frame, text="Video URL:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.url_entry = ttk.Entry(main_frame, width=50)
-        self.url_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
-        
-        # Output Directory
-        ttk.Label(main_frame, text="Output Directory:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        output_frame = ttk.Frame(main_frame)
-        output_frame.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=5)
-        
-        self.output_entry = ttk.Entry(output_frame, width=35)
-        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.output_entry.insert(0, "videos")
-        
-        browse_btn = ttk.Button(output_frame, text="Browse", command=self.browse_directory)
-        browse_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Format Selection
-        ttk.Label(main_frame, text="Format:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        format_frame = ttk.Frame(main_frame)
-        format_frame.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=5)
-        
-        self.format_var = tk.StringVar(value="best")
-        formats = ["best", "1080p", "720p", "mp3"]
-        
-        for fmt in formats:
-            ttk.Radiobutton(
-                format_frame,
-                text=fmt,
-                variable=self.format_var,
-                value=fmt
-            ).pack(side=tk.LEFT, padx=5)
-        
-        # Audio Only Checkbox
-        self.audio_var = tk.BooleanVar()
-        ttk.Checkbutton(
-            main_frame,
-            text="Audio Only (MP3)",
-            variable=self.audio_var
-        ).grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
-        
-        # Progress Bar
-        ttk.Label(main_frame, text="Progress:").grid(row=5, column=0, sticky=tk.W, pady=5)
-        self.progress = ttk.Progressbar(
-            main_frame,
-            mode='indeterminate'
+        style.configure(
+            "KyZer.TCombobox",
+            fieldbackground=self.INPUT, background=self.INPUT,
+            foreground=self.TEXT, arrowcolor=self.TEXT,
+            bordercolor=self.INPUT, padding=9,
         )
-        self.progress.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=5)
-        
-        # Status Label
-        self.status_label = ttk.Label(main_frame, text="Ready", foreground="blue")
-        self.status_label.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        
-        # Buttons Frame
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=7, column=0, columnspan=2, pady=20)
-        
-        self.download_btn = ttk.Button(
-            button_frame,
-            text="Download",
+        style.map(
+            "KyZer.TCombobox",
+            fieldbackground=[("readonly", self.INPUT)],
+            foreground=[("readonly", self.TEXT)],
+            selectbackground=[("readonly", self.INPUT)],
+            selectforeground=[("readonly", self.TEXT)],
+        )
+        style.configure(
+            "Accent.TButton", background=self.ACCENT, foreground="#ffffff",
+            borderwidth=0, focusthickness=0, padding=(18, 12),
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("disabled", "#63313a"), ("active", "#ff6375")],
+            foreground=[("disabled", "#b8a2a6"), ("active", "#ffffff")],
+        )
+        style.configure(
+            "Quiet.TButton", background=self.INPUT, foreground=self.TEXT,
+            borderwidth=0, focusthickness=0, padding=(12, 9),
+            font=("Segoe UI", 9, "bold"),
+        )
+        style.map(
+            "Quiet.TButton",
+            background=[("active", "#343846"), ("disabled", self.PANEL)],
+            foreground=[("disabled", self.MUTED)],
+        )
+
+    def _build_interface(self) -> None:
+        # Branded header
+        header = tk.Frame(self.root, bg=self.HEADER, height=132)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        inner = tk.Frame(header, bg=self.HEADER)
+        inner.pack(fill="both", expand=True, padx=32, pady=22)
+
+        logo = tk.Canvas(inner, width=58, height=58, bg=self.HEADER, highlightthickness=0)
+        logo.pack(side="left", padx=(0, 14))
+        logo.create_polygon(
+            8, 5, 50, 5, 55, 10, 55, 48, 50, 53, 8, 53, 3, 48, 3, 10,
+            smooth=True, fill=self.ACCENT, outline=self.ACCENT
+        )
+        logo.create_polygon(23, 17, 23, 41, 42, 29, fill="#ffffff", outline="#ffffff")
+
+        brand = tk.Frame(inner, bg=self.HEADER)
+        brand.pack(side="left", anchor="center")
+        tk.Label(
+            brand, text="KyZer Downloader", bg=self.HEADER, fg=self.TEXT,
+            font=("Segoe UI", 22, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            brand, text="VIDEO DOWNLOADER  •  SIMPLE, FAST, CLEAN",
+            bg=self.HEADER, fg=self.ACCENT, font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", pady=(2, 0))
+        tk.Label(
+            inner, text="DESKTOP EDITION", bg="#292b36", fg="#d7d9e0",
+            font=("Segoe UI", 8, "bold"), padx=12, pady=7
+        ).pack(side="right", anchor="center")
+
+        tk.Frame(self.root, bg=self.ACCENT, height=3).pack(fill="x")
+
+        # Main content
+        content = tk.Frame(self.root, bg=self.BG)
+        content.pack(fill="both", expand=True, padx=34, pady=(25, 16))
+
+        tk.Label(
+            content, text="Ready to download?", bg=self.BG, fg=self.TEXT,
+            font=("Segoe UI", 19, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            content, text="Paste a video link, choose your quality, and save it to your PC.",
+            bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9)
+        ).pack(anchor="w", pady=(4, 19))
+
+        # URL card
+        url_card = tk.Frame(content, bg=self.PANEL, padx=18, pady=16)
+        url_card.pack(fill="x")
+        tk.Label(
+            url_card, text="VIDEO URL", bg=self.PANEL, fg="#c8cbd4",
+            font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", pady=(0, 9))
+        url_row = tk.Frame(url_card, bg=self.PANEL)
+        url_row.pack(fill="x")
+        self.url_entry = tk.Entry(
+            url_row, textvariable=self.url_var, bg=self.INPUT, fg=self.TEXT,
+            insertbackground=self.TEXT, relief="flat", bd=0,
+            font=("Segoe UI", 10), highlightthickness=1,
+            highlightbackground=self.INPUT, highlightcolor=self.ACCENT,
+        )
+        self.url_entry.pack(side="left", fill="x", expand=True, ipady=12, padx=(0, 9))
+        self.url_entry.bind("<Return>", lambda _event: self.start_download())
+        ttk.Button(
+            url_row, text="Paste", style="Quiet.TButton", command=self._paste_url
+        ).pack(side="right")
+
+        # Quality and destination cards
+        options = tk.Frame(content, bg=self.BG)
+        options.pack(fill="x", pady=(17, 0))
+        options.columnconfigure(0, weight=1)
+        options.columnconfigure(1, weight=1)
+
+        quality_card = tk.Frame(options, bg=self.PANEL, padx=16, pady=14)
+        quality_card.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        tk.Label(
+            quality_card, text="FORMAT & QUALITY", bg=self.PANEL, fg="#c8cbd4",
+            font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", pady=(0, 8))
+        self.quality_box = ttk.Combobox(
+            quality_card, textvariable=self.quality_var,
+            values=("Best quality", "1080p HD", "720p HD", "480p SD", "MP3 audio"),
+            state="readonly", style="KyZer.TCombobox", font=("Segoe UI", 9),
+        )
+        self.quality_box.pack(fill="x")
+
+        folder_card = tk.Frame(options, bg=self.PANEL, padx=16, pady=14)
+        folder_card.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+        tk.Label(
+            folder_card, text="SAVE LOCATION", bg=self.PANEL, fg="#c8cbd4",
+            font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", pady=(0, 8))
+        folder_row = tk.Frame(folder_card, bg=self.PANEL)
+        folder_row.pack(fill="x")
+        self.folder_entry = tk.Entry(
+            folder_row, textvariable=self.folder_var, bg=self.INPUT, fg=self.TEXT,
+            insertbackground=self.TEXT, relief="flat", bd=0,
+            font=("Segoe UI", 9), highlightthickness=1,
+            highlightbackground=self.INPUT, highlightcolor=self.ACCENT,
+        )
+        self.folder_entry.pack(side="left", fill="x", expand=True, ipady=10, padx=(0, 7))
+        self.browse_button = ttk.Button(
+            folder_row, text="Browse", style="Quiet.TButton", command=self._browse_folder
+        )
+        self.browse_button.pack(side="right")
+
+        # Progress card
+        progress_card = tk.Frame(content, bg=self.PANEL, padx=18, pady=16)
+        progress_card.pack(fill="x", pady=(17, 0))
+        progress_top = tk.Frame(progress_card, bg=self.PANEL)
+        progress_top.pack(fill="x")
+        tk.Label(
+            progress_top, text="DOWNLOAD PROGRESS", bg=self.PANEL, fg="#c8cbd4",
+            font=("Segoe UI", 8, "bold")
+        ).pack(side="left")
+        tk.Label(
+            progress_top, textvariable=self.progress_text_var, bg=self.PANEL,
+            fg=self.ACCENT, font=("Segoe UI", 9, "bold")
+        ).pack(side="right")
+        self.progress_bar = ttk.Progressbar(
+            progress_card, maximum=100, value=0, style="KyZer.Horizontal.TProgressbar"
+        )
+        self.progress_bar.pack(fill="x", pady=(11, 10))
+        self.status_label = tk.Label(
+            progress_card, textvariable=self.status_var, bg=self.PANEL,
+            fg=self.MUTED, font=("Segoe UI", 9), anchor="w"
+        )
+        self.status_label.pack(fill="x")
+
+        # Actions and footer
+        actions = tk.Frame(content, bg=self.BG)
+        actions.pack(fill="x", pady=(19, 0))
+        self.clear_button = ttk.Button(
+            actions, text="Clear", style="Quiet.TButton", command=self.clear_fields
+        )
+        self.clear_button.pack(side="left")
+        self.download_button = ttk.Button(
+            actions, text="↓   DOWNLOAD NOW", style="Accent.TButton",
             command=self.start_download
         )
-        self.download_btn.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            button_frame,
-            text="Clear",
-            command=self.clear_fields
-        ).pack(side=tk.LEFT, padx=5)
-        
-        # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-    
-    def browse_directory(self):
-        """Open directory browser"""
-        directory = filedialog.askdirectory(title="Select Output Directory")
-        if directory:
-            self.output_entry.delete(0, tk.END)
-            self.output_entry.insert(0, directory)
-    
-    def clear_fields(self):
-        """Clear all input fields"""
-        self.url_entry.delete(0, tk.END)
-        self.output_entry.delete(0, tk.END)
-        self.output_entry.insert(0, "videos")
-        self.status_label.config(text="Ready", foreground="blue")
-        self.progress.stop()
-    
-    def start_download(self):
-        """Start downloading in a separate thread"""
-        url = self.url_entry.get().strip()
-        
-        if not url:
-            messagebox.showerror("Error", "Please enter a YouTube URL")
-            return
-        
-        if not ("youtube.com" in url or "youtu.be" in url):
-            messagebox.showerror("Error", "Invalid YouTube URL")
-            return
-        
-        self.downloading = True
-        self.download_btn.config(state=tk.DISABLED)
-        self.progress.start()
-        self.status_label.config(text="Downloading...", foreground="orange")
-        
-        # Run download in separate thread
-        thread = threading.Thread(
-            target=self._download_thread,
-            args=(url,)
-        )
-        thread.daemon = True
-        thread.start()
-    
-    def _download_thread(self, url):
-        """Download thread"""
+        self.download_button.pack(side="right")
+
+        footer = tk.Frame(content, bg=self.BG)
+        footer.pack(fill="x", side="bottom", pady=(18, 0))
+        tk.Label(
+            footer, text="Powered by yt-dlp", bg=self.BG, fg="#777c89",
+            font=("Segoe UI", 8)
+        ).pack(side="left")
+        tk.Label(
+            footer, text="Made by KyZer_HADOC", bg=self.BG, fg="#777c89",
+            font=("Segoe UI", 8)
+        ).pack(side="right")
+
+    @staticmethod
+    def _is_supported_url(url: str) -> bool:
         try:
-            output_dir = self.output_entry.get()
-            self.downloader = YouTubeDownloader(output_dir)
-            
-            success = self.downloader.download_video(
-                url,
-                format_type=self.format_var.get(),
-                audio_only=self.audio_var.get()
+            parsed = urlsplit(url.strip())
+            host = (parsed.hostname or "").lower()
+            return parsed.scheme in ("http", "https") and (
+                host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
             )
-            
-            if success:
-                self.status_label.config(text="✓ Download completed!", foreground="green")
-                messagebox.showinfo("Success", "Video downloaded successfully!")
-            else:
-                self.status_label.config(text="✗ Download failed", foreground="red")
-                messagebox.showerror("Error", "Failed to download video")
-        
-        except Exception as e:
-            self.status_label.config(text="✗ Error occurred", foreground="red")
-            messagebox.showerror("Error", f"An error occurred: {str(e)}")
-        
-        finally:
-            self.progress.stop()
-            self.download_btn.config(state=tk.NORMAL)
-            self.downloading = False
+        except ValueError:
+            return False
+
+    def _paste_url(self) -> None:
+        try:
+            value = self.root.clipboard_get().strip()
+        except tk.TclError:
+            value = ""
+        if value:
+            self.url_var.set(value)
+            self.url_entry.focus_set()
+
+    def _browse_folder(self) -> None:
+        selected = filedialog.askdirectory(
+            title="Choose download folder",
+            initialdir=self.folder_var.get() or str(Path.home())
+        )
+        if selected:
+            self.folder_var.set(selected)
+
+    def clear_fields(self) -> None:
+        if self.is_downloading:
+            return
+        self.url_var.set("")
+        self.quality_var.set("Best quality")
+        self.progress_bar["value"] = 0
+        self.progress_text_var.set("0%")
+        self.status_var.set("Ready when you are")
+        self.status_label.configure(fg=self.MUTED)
+        self.url_entry.focus_set()
+
+    def _set_busy(self, busy: bool) -> None:
+        self.is_downloading = busy
+        state = "disabled" if busy else "normal"
+        self.download_button.configure(state=state)
+        self.clear_button.configure(state=state)
+        self.browse_button.configure(state=state)
+        self.quality_box.configure(state="disabled" if busy else "readonly")
+        self.url_entry.configure(state=state)
+        self.folder_entry.configure(state=state)
+
+    def start_download(self) -> None:
+        if self.is_downloading:
+            return
+        url = self.url_var.get().strip()
+        folder = self.folder_var.get().strip()
+
+        if not url:
+            messagebox.showwarning("KyZer Downloader", "Paste a YouTube video link first.")
+            self.url_entry.focus_set()
+            return
+        if not self._is_supported_url(url):
+            messagebox.showerror(
+                "Invalid link", "Please enter a valid YouTube URL (youtube.com or youtu.be)."
+            )
+            return
+        if not folder:
+            messagebox.showwarning("Save location", "Choose a folder for your download.")
+            return
+
+        quality_map = {
+            "Best quality": "best", "1080p HD": "1080p",
+            "720p HD": "720p", "480p SD": "480p", "MP3 audio": "mp3",
+        }
+        format_type = quality_map.get(self.quality_var.get(), "best")
+        try:
+            Path(folder).expanduser().mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("Save location error", str(exc))
+            return
+
+        self._set_busy(True)
+        self.progress_bar["value"] = 0
+        self.progress_text_var.set("0%")
+        self.status_var.set("Connecting to YouTube…")
+        self.status_label.configure(fg=self.ACCENT)
+
+        threading.Thread(
+            target=self._download_worker,
+            args=(url, folder, format_type, format_type == "mp3"),
+            daemon=True,
+        ).start()
+
+    def _download_worker(self, url: str, folder: str, format_type: str, audio_only: bool) -> None:
+        try:
+            downloader = YouTubeDownloader(folder)
+            callback = lambda data: self.events.put(("progress", data))
+            success = downloader.download_video(
+                url, format_type=format_type, audio_only=audio_only,
+                progress_callback=callback,
+            )
+            self.events.put(("done", bool(success)))
+        except Exception as exc:
+            self.events.put(("error", str(exc)))
+
+    def _process_events(self) -> None:
+        if self.closing:
+            return
+        try:
+            while True:
+                event = self.events.get_nowait()
+                kind = event[0]
+                if kind == "progress":
+                    data = event[1]
+                    percent = max(0.0, min(100.0, float(data.get("percent") or 0)))
+                    self.progress_bar["value"] = percent
+                    self.progress_text_var.set(f"{percent:.0f}%")
+                    if data.get("status") == "processing":
+                        self.status_var.set("Finishing up your download…")
+                    else:
+                        details = []
+                        if data.get("speed"):
+                            details.append(str(data["speed"]))
+                        if data.get("eta"):
+                            details.append(f"ETA {data['eta']}")
+                        self.status_var.set(
+                            "Downloading…" + (f"  {'  •  '.join(details)}" if details else "")
+                        )
+                elif kind == "done":
+                    self._set_busy(False)
+                    if event[1]:
+                        self.progress_bar["value"] = 100
+                        self.progress_text_var.set("100%")
+                        self.status_var.set("Download completed successfully.")
+                        self.status_label.configure(fg=self.GREEN)
+                        messagebox.showinfo(
+                            "Download complete", "Your download has been saved successfully."
+                        )
+                    else:
+                        self.status_var.set("The download could not be completed.")
+                        self.status_label.configure(fg=self.ACCENT)
+                        messagebox.showerror("Download failed", "yt-dlp could not complete this download.")
+                elif kind == "error":
+                    self._set_busy(False)
+                    self.status_var.set("Something went wrong. See the error message.")
+                    self.status_label.configure(fg=self.ACCENT)
+                    messagebox.showerror("Download error", event[1])
+        except queue.Empty:
+            pass
+        self.root.after(100, self._process_events)
+
+    def _on_close(self) -> None:
+        if self.is_downloading and not messagebox.askyesno(
+            "Download in progress",
+            "A download is still running. Close KyZer Downloader anyway?"
+        ):
+            return
+        self.closing = True
+        self.root.destroy()
 
 
-def main():
-    """Main GUI entry point"""
+def main() -> None:
     root = tk.Tk()
-    app = YouTubeDownloaderGUI(root)
+    KyZerDownloaderApp(root)
     root.mainloop()
 
 
