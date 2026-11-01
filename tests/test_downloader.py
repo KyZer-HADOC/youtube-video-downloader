@@ -1,6 +1,9 @@
 import unittest
 
-from downloader import (\n    detect_platform, format_bytes, format_duration, is_http_url,\n    is_supported_url, is_tiktok_challenge_error,\n)
+from downloader import (
+    detect_platform, format_bytes, format_duration, is_http_url,
+    is_supported_url, is_tiktok_challenge_error,
+)
 
 
 class TikTokChallengeDetectionTests(unittest.TestCase):
