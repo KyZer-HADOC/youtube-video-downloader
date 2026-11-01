@@ -207,6 +207,9 @@ class YouTubeDownloader:
             else:
                 format_selector = "bv*+ba/b"
 
+        existing_files = {
+            path.resolve() for path in self.output_dir.rglob("*") if path.is_file()
+        }
         template = output_template or str(
             self.output_dir / "%(title).180B [%(id)s].%(ext)s"
         )
@@ -313,10 +316,14 @@ class YouTubeDownloader:
             )
 
         candidates = sorted(
-            (path for path in self.output_dir.iterdir() if path.is_file()),
+            (
+                path for path in self.output_dir.rglob("*")
+                if path.is_file() and path.resolve() not in existing_files
+                and not path.name.endswith((".part", ".ytdl"))
+            ),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
         if candidates:
             return str(candidates[0])
-        return str(self.output_dir)
+        raise RuntimeError("yt-dlp finished but no new output file was found in the save folder.")
