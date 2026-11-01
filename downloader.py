@@ -430,6 +430,9 @@ class YouTubeDownloader:
             options["ffmpeg_location"] = ffmpeg
 
         if download_subtitles:
+            # Captions are optional; a subtitle endpoint returning HTTP 429
+            # must not cancel an otherwise successful video/audio download.
+            options["ignoreerrors"] = True
             options.update({
                 "writesubtitles": True,
                 "writeautomaticsub": True,
