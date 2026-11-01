@@ -32,8 +32,9 @@ def main() -> int:
         "--add-data", "{};.".format(PNG_ICON),
         # yt-dlp loads extractors dynamically, so keep its extractor package.
         "--collect-all", "yt_dlp",
-        # Collect only the FFmpeg binary/package resources, not unrelated Qt modules.
-        "--collect-binaries", "imageio_ffmpeg",
+        # FFmpeg is loaded dynamically by the downloader; include its runtime and binary.
+        "--collect-all", "imageio_ffmpeg",
+        "--hidden-import", "imageio_ffmpeg",
         "--hidden-import", "PySide6.QtMultimedia",
         "--hidden-import", "PySide6.QtMultimediaWidgets",
         "--hidden-import", "certifi",
