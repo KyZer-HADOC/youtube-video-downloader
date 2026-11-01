@@ -218,6 +218,8 @@ class KyZerYouBe(QMainWindow):
         self.queue_urls: list[str] = []
         self.history_file = app_data_dir() / "history.json"
         self.history: list[dict[str, str]] = self._load_history()
+        self.later_file = app_data_dir() / "download_later.json"
+        self.later_items: list[dict[str, str]] = self._load_later()
         self.output_dir = str(Path.home() / "Downloads" / "KyZer YouBe")
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         self.status_folder = ""
@@ -243,6 +245,156 @@ class KyZerYouBe(QMainWindow):
             return data if isinstance(data, list) else []
         except (OSError, json.JSONDecodeError):
             return []
+
+    def _load_later(self) -> list[dict[str, str]]:
+        try:
+            items = json.loads(self.later_file.read_text(encoding="utf-8"))
+            if not isinstance(items, list):
+                return []
+            return [
+                item for item in items
+                if isinstance(item, dict)
+                and isinstance(item.get("url"), str)
+                and is_supported_url(item["url"])
+            ]
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    def _save_later(self) -> None:
+        temporary = self.later_file.with_suffix(".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(self.later_items, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary.replace(self.later_file)
+        except OSError:
+            get_app_logger().exception("Could not save Download Later list")
+
+    def add_link_for_later(self, url: str | None = None) -> None:
+        target = (url or self.url_edit.text()).strip()
+        if not is_supported_url(target):
+            target = self.later_url_edit.text().strip() if hasattr(self, "later_url_edit") else target
+        if not is_supported_url(target):
+            QMessageBox.warning(self, APP_NAME, "Enter a valid YouTube, TikTok or Facebook link.")
+            return
+
+        key = target.rstrip("/")
+        if any(item.get("url", "").rstrip("/") == key for item in self.later_items):
+            self.later_status.setText("That link is already saved in Download Later.")
+            return
+
+        title = "Saved link"
+        if self.info and self.info.get("webpage_url") == target:
+            title = str(self.info.get("title") or title)
+        self.later_items.insert(0, {
+            "title": title,
+            "url": target,
+            "added": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        })
+        self._save_later()
+        self._refresh_later_list()
+        self.later_status.setText("Link saved. It will still be here after restarting the app.")
+        if hasattr(self, "later_url_edit"):
+            self.later_url_edit.clear()
+
+    def _refresh_later_list(self) -> None:
+        if not hasattr(self, "later_list"):
+            return
+        self.later_list.clear()
+        for saved in self.later_items:
+            item = QListWidgetItem(
+                "{}\n{}\nAdded: {}".format(
+                    saved.get("title") or "Saved link",
+                    saved.get("url") or "",
+                    saved.get("added") or "—",
+                )
+            )
+            item.setData(Qt.UserRole, saved.get("url", ""))
+            self.later_list.addItem(item)
+        self.later_count.setText("{} saved link(s)".format(len(self.later_items)))
+        enabled = bool(self.later_items)
+        self.download_later_all_button.setEnabled(enabled)
+        self.remove_later_button.setEnabled(enabled)
+
+    def remove_later_selected(self) -> None:
+        urls = {
+            item.data(Qt.UserRole)
+            for item in self.later_list.selectedItems()
+        }
+        if not urls:
+            QMessageBox.information(self, APP_NAME, "Select one or more saved links first.")
+            return
+        self.later_items = [
+            saved for saved in self.later_items if saved.get("url") not in urls
+        ]
+        self._save_later()
+        self._refresh_later_list()
+        self.later_status.setText("Selected link(s) removed.")
+
+    def clear_later_list(self) -> None:
+        if not self.later_items:
+            return
+        reply = QMessageBox.question(
+            self, APP_NAME, "Remove every saved link from Download Later?"
+        )
+        if reply == QMessageBox.Yes:
+            self.later_items = []
+            self._save_later()
+            self._refresh_later_list()
+            self.later_status.setText("Download Later list cleared.")
+
+    def open_later_item(self, item: QListWidgetItem) -> None:
+        url = str(item.data(Qt.UserRole) or "")
+        if is_supported_url(url):
+            self.url_edit.setText(url)
+            self._show_page(0)
+            self.get_video_info()
+
+    def download_later_selected(self) -> None:
+        selected = self.later_list.selectedItems()
+        urls = [str(item.data(Qt.UserRole) or "") for item in selected]
+        urls = [url for url in urls if is_supported_url(url)]
+        self._start_later_download(urls)
+
+    def download_later_all(self) -> None:
+        self._start_later_download([
+            item.get("url", "") for item in self.later_items
+            if is_supported_url(item.get("url", ""))
+        ])
+
+    def _start_later_download(self, urls: list[str]) -> None:
+        if not urls:
+            QMessageBox.information(self, APP_NAME, "Select at least one saved link.")
+            return
+        if self.download_worker and self.download_worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "A download is already running.")
+            return
+        self.queue_urls = list(dict.fromkeys(urls))
+        self.queue_list.clear()
+        for url in self.queue_urls:
+            self.queue_list.addItem("{}  •  {}".format(detect_platform(url), url))
+        self.queue_list.setVisible(True)
+        self.queue_count_label.setText("Queue: {}".format(len(self.queue_urls)))
+        self.download_status.setText("Download Later links moved to the active queue.")
+        self._show_page(0)
+        self.start_download()
+
+    def _remove_downloaded_from_later(self, results: list[dict[str, str]]) -> None:
+        completed = {
+            str(result.get("url") or "").rstrip("/")
+            for result in results if result.get("url")
+        }
+        if not completed:
+            return
+        original_count = len(self.later_items)
+        self.later_items = [
+            item for item in self.later_items
+            if item.get("url", "").rstrip("/") not in completed
+        ]
+        if len(self.later_items) != original_count:
+            self._save_later()
+            self._refresh_later_list()
 
     def _save_history(self, title: str, path: str, url: str) -> None:
         self.history.insert(0, {
@@ -317,6 +469,7 @@ class KyZerYouBe(QMainWindow):
         self.nav_buttons: list[QPushButton] = []
         nav_items = [
             ("⌂", "Downloader"),
+            ("⇩", "Download Later"),
             ("◉", "WhatsApp Status"),
             ("◷", "Download History"),
             ("⚙", "Settings"),
@@ -337,6 +490,7 @@ class KyZerYouBe(QMainWindow):
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self._build_downloader_page())
+        self.pages.addWidget(self._build_download_later_page())
         self.pages.addWidget(self._build_whatsapp_page())
         self.pages.addWidget(self._build_history_page())
         self.pages.addWidget(self._build_settings_page())
@@ -666,6 +820,10 @@ class KyZerYouBe(QMainWindow):
         self.add_queue_button = QPushButton("+  Add to Queue")
         self.add_queue_button.clicked.connect(self.add_to_queue)
         action_row.addWidget(self.add_queue_button)
+        self.save_later_button = QPushButton("◷  Save for Later")
+        self.save_later_button.setObjectName("Ghost")
+        self.save_later_button.clicked.connect(lambda: self.add_link_for_later(self.url_edit.text()))
+        action_row.addWidget(self.save_later_button)
         self.queue_count_label = self._label("Queue: 0")
         action_row.addWidget(self.queue_count_label)
         action_row.addStretch(1)
@@ -701,6 +859,71 @@ class KyZerYouBe(QMainWindow):
         box.addWidget(label)
         layout.addLayout(box)
         return label
+
+    def _build_download_later_page(self) -> QWidget:
+        page, layout = self._page_container()
+        layout.addWidget(self._label("Download Later", "HeroTitle"))
+        layout.addWidget(self._label(
+            "Save video links here and come back to download them whenever you're ready.",
+            "HeroSub"
+        ))
+
+        add_card_widget, add_layout = make_card(padding=16)
+        add_layout.addWidget(self._label("SAVE A LINK", "FieldLabel"))
+        row = QHBoxLayout()
+        self.later_url_edit = QLineEdit()
+        self.later_url_edit.setPlaceholderText("Paste a YouTube, TikTok or Facebook URL…")
+        self.later_url_edit.returnPressed.connect(
+            lambda: self.add_link_for_later(self.later_url_edit.text())
+        )
+        row.addWidget(self.later_url_edit, 1)
+        paste = QPushButton("Paste")
+        paste.clicked.connect(lambda: self.later_url_edit.setText(QApplication.clipboard().text().strip()))
+        row.addWidget(paste)
+        add_link = QPushButton("+  Save Link")
+        add_link.setObjectName("Primary")
+        add_link.clicked.connect(
+            lambda: self.add_link_for_later(self.later_url_edit.text())
+        )
+        row.addWidget(add_link)
+        add_layout.addLayout(row)
+        layout.addWidget(add_card_widget)
+
+        list_card, list_layout = make_card(padding=16)
+        head = QHBoxLayout()
+        head.addWidget(self._label("SAVED LINKS", "SectionTitle"))
+        head.addStretch(1)
+        self.later_count = self._label("0 saved links")
+        head.addWidget(self.later_count)
+        list_layout.addLayout(head)
+        self.later_list = QListWidget()
+        self.later_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.later_list.setMinimumHeight(300)
+        self.later_list.itemDoubleClicked.connect(self.open_later_item)
+        list_layout.addWidget(self.later_list)
+
+        buttons = QHBoxLayout()
+        self.download_later_selected_button = QPushButton("⬇  Download Selected")
+        self.download_later_selected_button.setObjectName("Primary")
+        self.download_later_selected_button.clicked.connect(self.download_later_selected)
+        buttons.addWidget(self.download_later_selected_button)
+        self.download_later_all_button = QPushButton("Download All")
+        self.download_later_all_button.clicked.connect(self.download_later_all)
+        buttons.addWidget(self.download_later_all_button)
+        self.remove_later_button = QPushButton("Remove Selected")
+        self.remove_later_button.setObjectName("Danger")
+        self.remove_later_button.clicked.connect(self.remove_later_selected)
+        buttons.addWidget(self.remove_later_button)
+        clear = QPushButton("Clear All")
+        clear.clicked.connect(self.clear_later_list)
+        buttons.addWidget(clear)
+        list_layout.addLayout(buttons)
+        self.later_status = self._label("Saved links are kept on this PC.")
+        list_layout.addWidget(self.later_status)
+        layout.addWidget(list_card)
+        layout.addStretch(1)
+        self._refresh_later_list()
+        return self._scroll_page(page)
 
     def _build_whatsapp_page(self) -> QWidget:
         page, layout = self._page_container()
@@ -867,6 +1090,8 @@ class KyZerYouBe(QMainWindow):
 
     def _show_page(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
+        if index == 1:
+            self._refresh_later_list()
         for i, button in enumerate(self.nav_buttons):
             button.setChecked(i == index)
 
@@ -1197,6 +1422,7 @@ class KyZerYouBe(QMainWindow):
         self.download_status.setText(
             "Completed {} file(s) successfully.".format(len(results))
         )
+        self._remove_downloaded_from_later(results)
         for result in results:
             path = str(result.get("path") or "")
             source_url = str(result.get("url") or self.url_edit.text().strip())
