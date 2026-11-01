@@ -112,13 +112,13 @@ class InfoWorker(QThread):
 
 class DownloadWorker(QThread):
     progress = Signal(dict)
-    succeeded = Signal(str)
+    succeeded = Signal(list)
     failed = Signal(str)
     cancelled = Signal()
 
     def __init__(
         self,
-        url: str,
+        urls: list[str],
         output_dir: str,
         quality: str,
         audio_only: bool,
@@ -128,7 +128,7 @@ class DownloadWorker(QThread):
         section: tuple[float, float] | None,
     ) -> None:
         super().__init__()
-        self.url = url
+        self.urls = urls
         self.output_dir = output_dir
         self.quality = quality
         self.audio_only = audio_only
@@ -144,21 +144,35 @@ class DownloadWorker(QThread):
     def run(self) -> None:
         try:
             engine = YouTubeDownloader(self.output_dir)
-            path = engine.download_video(
-                self.url,
-                quality=self.quality,
-                audio_only=self.audio_only,
-                download_subtitles=self.subtitles,
-                embed_thumbnail=self.thumbnail,
-                allow_playlist=self.playlist,
-                section=self.section,
-                progress_callback=self.progress.emit,
-                cancel_event=self.cancel_event,
-            )
+            paths = []
+            total = len(self.urls)
+            for index, url in enumerate(self.urls, start=1):
+                if self.cancel_event.is_set():
+                    raise DownloadCancelled("Download queue cancelled by user.")
+
+                def report_progress(data: dict[str, Any]) -> None:
+                    payload = dict(data)
+                    payload["queue_index"] = index
+                    payload["queue_total"] = total
+                    self.progress.emit(payload)
+
+                path = engine.download_video(
+                    url,
+                    quality=self.quality,
+                    audio_only=self.audio_only,
+                    download_subtitles=self.subtitles,
+                    embed_thumbnail=self.thumbnail,
+                    allow_playlist=self.playlist,
+                    section=self.section,
+                    progress_callback=report_progress,
+                    cancel_event=self.cancel_event,
+                )
+                paths.append(path)
+
             if self.cancel_event.is_set():
                 self.cancelled.emit()
             else:
-                self.succeeded.emit(path)
+                self.succeeded.emit(paths)
         except DownloadCancelled:
             self.cancelled.emit()
         except Exception as exc:
@@ -411,6 +425,7 @@ class KyZerYouBe(QMainWindow):
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("Paste a YouTube, TikTok or Facebook link here…")
         self.url_edit.returnPressed.connect(self.get_video_info)
+        self.url_edit.textChanged.connect(self._update_platform_badge)
         url_row.addWidget(self.url_edit, 1)
         self.paste_button = QPushButton("▣  Paste")
         self.paste_button.setObjectName("Ghost")
@@ -903,8 +918,12 @@ class KyZerYouBe(QMainWindow):
     def start_download(self) -> None:
         if self.download_worker and self.download_worker.isRunning():
             return
-        url = self.url_edit.text().strip()
-        if not is_supported_url(url):
+        current_url = self.url_edit.text().strip()
+        if self.queue_urls:
+            urls = list(self.queue_urls)
+        elif is_supported_url(current_url):
+            urls = [current_url]
+        else:
             QMessageBox.warning(
                 self, APP_NAME, "Paste a valid YouTube, TikTok or Facebook link first."
             )
@@ -948,11 +967,13 @@ class KyZerYouBe(QMainWindow):
         self.progress_bar.setValue(0)
         self.percent_label.setText("0%")
         self._set_metrics("0 B", "Estimating…", "—", "—", "—")
-        self.download_status.setText("Connecting to {}…".format(detect_platform(url)))
+        self.download_status.setText(
+            "Starting {} item(s) in the download queue…".format(len(urls))
+        )
         self.header_status.setText("●  DOWNLOAD IN PROGRESS")
 
         self.download_worker = DownloadWorker(
-            url=url,
+            urls=urls,
             output_dir=output,
             quality=quality,
             audio_only=audio_only,
@@ -976,8 +997,14 @@ class KyZerYouBe(QMainWindow):
         self.eta_metric.setText(eta)
 
     def _download_progress(self, data: dict[str, Any]) -> None:
+        queue_index = data.get("queue_index")
+        queue_total = data.get("queue_total")
+        queue_prefix = (
+            "Queue {}/{}  •  ".format(queue_index, queue_total)
+            if queue_index and queue_total and queue_total > 1 else ""
+        )
         if data.get("status") == "processing":
-            self.download_status.setText("Download received — merging and processing…")
+            self.download_status.setText(queue_prefix + "Download received — merging and processing…")
         else:
             percent = int(max(0, min(100, float(data.get("percent") or 0))))
             self.progress_bar.setValue(percent)
@@ -989,15 +1016,28 @@ class KyZerYouBe(QMainWindow):
                 data.get("speed_text", "—"),
                 data.get("eta_text", "—"),
             )
-            self.download_status.setText("Downloading media…")
+            self.download_status.setText(queue_prefix + "Downloading media…")
 
-    def _download_succeeded(self, path: str) -> None:
+    def _download_succeeded(self, paths: list[str]) -> None:
         self.progress_bar.setValue(100)
         self.percent_label.setText("100%")
-        self.download_status.setText("Download completed successfully.")
-        title = self.info.get("title") if self.info else Path(path).name
-        self._save_history(str(title), path, self.url_edit.text().strip())
-        QMessageBox.information(self, APP_NAME, "Download completed successfully.")
+        self.download_status.setText(
+            "Completed {} download(s) successfully.".format(len(paths))
+        )
+        for index, path in enumerate(paths):
+            title = Path(path).name
+            if len(paths) == 1 and self.info:
+                title = str(self.info.get("title") or title)
+            source_url = self.queue_urls[index] if index < len(self.queue_urls) else self.url_edit.text().strip()
+            self._save_history(str(title), path, source_url)
+
+        self.queue_urls.clear()
+        self.queue_list.clear()
+        self.queue_list.setVisible(False)
+        self.queue_count_label.setText("Queue: 0")
+        QMessageBox.information(
+            self, APP_NAME, "Completed {} download(s) successfully.".format(len(paths))
+        )
 
     def _download_failed(self, message: str) -> None:
         self.download_status.setText("Download failed.")
