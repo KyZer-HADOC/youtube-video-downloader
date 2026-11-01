@@ -1,6 +1,6 @@
 import unittest
 
-from downloader import detect_platform, format_bytes, format_duration, is_supported_url
+from downloader import detect_platform, format_bytes, format_duration, is_http_url, is_supported_url
 
 
 class PlatformDetectionTests(unittest.TestCase):
@@ -16,9 +16,17 @@ class PlatformDetectionTests(unittest.TestCase):
         self.assertEqual(detect_platform("https://www.facebook.com/watch/?v=123"), "Facebook")
         self.assertEqual(detect_platform("https://fb.watch/abc"), "Facebook")
 
-    def test_reject_unknown_host(self):
+    def test_reject_unknown_host_from_main_platform_filter(self):
         self.assertEqual(detect_platform("https://example.com/video"), "Unsupported")
         self.assertFalse(is_supported_url("https://example.com/video"))
+
+    def test_other_dl_accepts_generic_http_websites(self):
+        self.assertTrue(is_http_url("https://example.com/video"))
+        self.assertTrue(is_http_url("https://cdn.example.com/media/clip.mp4"))
+        self.assertFalse(is_supported_url("https://example.com/video"))
+        self.assertFalse(is_http_url("file:///C:/video.mp4"))
+        self.assertFalse(is_http_url("javascript:alert(1)"))
+        self.assertFalse(is_http_url("not a url"))
 
     def test_reject_malformed_url(self):
         self.assertFalse(is_supported_url("not a url"))
