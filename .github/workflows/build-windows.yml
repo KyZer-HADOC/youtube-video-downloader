@@ -30,15 +30,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install pyinstaller
+          python -m pip install pyinstaller pillow
 
       - name: Validate Python source
         run: |
           python -m compileall -q app.py downloader.py build_windows.py
           python -m unittest discover -s tests -v
 
-      - name: Build Windows application folder
+      - name: Build size-optimised Windows application folder
         run: python build_windows.py
+
+      - name: Report packaged folder size
+        shell: pwsh
+        run: |
+          $bytes = (Get-ChildItem "dist\KyZer YouBe" -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Host ("Packaged application: {0:N1} MiB" -f ($bytes / 1MB))
 
       - name: Sign app executable when a trusted certificate is configured
         shell: pwsh
@@ -75,6 +81,8 @@ jobs:
           if (-not (Test-Path $compiler)) { throw "Inno Setup compiler was not found: $compiler" }
           & $compiler "Setup.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+          $setupBytes = (Get-Item "installer\KyZer-YouBe-Setup.exe").Length
+          Write-Host ("Setup.exe: {0:N1} MiB" -f ($setupBytes / 1MB))
 
       - name: Sign Setup.exe when a trusted certificate is configured
         shell: pwsh
@@ -101,39 +109,29 @@ jobs:
             Write-Warning "No trusted signing certificate secrets found. Setup.exe is unsigned; SmartScreen may show an unrecognized-app warning."
           }
 
-      - name: Package portable ZIP
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "dist\KyZer YouBe\*" -DestinationPath "KyZer-YouBe-Portable-Windows.zip" -Force
-          if (-not (Test-Path "installer\KyZer-YouBe-Setup.exe")) { throw "Setup.exe was not created." }
-
-      - name: Upload build artifacts
+      - name: Upload installer-only artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KyZer-YouBe-Windows
-          path: |
-            installer/KyZer-YouBe-Setup.exe
-            KyZer-YouBe-Portable-Windows.zip
+          name: KyZer-YouBe-Setup
+          path: installer/KyZer-YouBe-Setup.exe
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.0
-          name: KyZer YouBe v2.0.0
+          tag_name: v2.0.1
+          name: KyZer YouBe v2.0.1 (Smaller Installer)
           make_latest: true
           prerelease: false
           overwrite_files: true
-          files: |
-            installer/KyZer-YouBe-Setup.exe
-            KyZer-YouBe-Portable-Windows.zip
+          files: installer/KyZer-YouBe-Setup.exe
           body: |
-            KyZer YouBe all-in-one Windows desktop release.
+            KyZer YouBe v2.0.1 — reduced-size Windows installer.
 
-            Includes YouTube, TikTok and Facebook download support; local WhatsApp Status Saver; media info; preview; clip selection; detailed download progress; history and settings.
+            Includes YouTube, TikTok and Facebook downloads; local WhatsApp Status Saver; media info; preview; clip selection; progress details; history and settings.
 
-            Install with KyZer-YouBe-Setup.exe. A portable ZIP is also available.
+            Only the Setup.exe installer is published. The oversized duplicate portable package has been removed.
             If no trusted code-signing certificate is configured, Windows SmartScreen may show an unrecognized-app warning.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
