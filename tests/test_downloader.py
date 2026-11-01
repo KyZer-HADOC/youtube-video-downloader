@@ -1,6 +1,17 @@
 import unittest
 
-from downloader import detect_platform, format_bytes, format_duration, is_http_url, is_supported_url
+from downloader import (\n    detect_platform, format_bytes, format_duration, is_http_url,\n    is_supported_url, is_tiktok_challenge_error,\n)
+
+
+class TikTokChallengeDetectionTests(unittest.TestCase):
+    def test_known_tiktok_challenge_errors_are_recognised(self):
+        self.assertTrue(is_tiktok_challenge_error("Unexpected response from webpage request"))
+        self.assertTrue(is_tiktok_challenge_error("Unable to extract challenge data"))
+        self.assertTrue(is_tiktok_challenge_error("Unable to extract universal data for rehydration"))
+
+    def test_unrelated_errors_are_not_marked_as_tiktok_challenges(self):
+        self.assertFalse(is_tiktok_challenge_error("HTTP Error 404: Not Found"))
+        self.assertFalse(is_tiktok_challenge_error("This video is private"))
 
 
 class PlatformDetectionTests(unittest.TestCase):
