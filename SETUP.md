@@ -1,144 +1,76 @@
-# YouTube Video Downloader - Setup Guide
+# KyZer Downloader — Setup Guide
 
-## 🚀 How to Create the Desktop App
+## 1. Requirements
 
-### Step 1: Install Python
-- Download Python from https://www.python.org/
-- **Important:** Check "Add Python to PATH" during installation
-- Verify installation: Open Command Prompt and type `python --version`
+- Windows 10 or later
+- Python 3.10 or newer
+- FFmpeg (recommended; required for MP3 conversion and merging separate audio/video streams)
 
-### Step 2: Download/Clone Repository
-```bash
-git clone https://github.com/KyZer-HADOC/youtube-video-downloader.git
-cd youtube-video-downloader
-```
+## 2. Download the project
 
-### Step 3: Build the App
+Clone the repository:
 
-#### **Windows Users:**
-1. Double-click `build.bat`
-2. Wait for the build to complete
-3. Find your executable in the `dist` folder
-4. Create a shortcut on your desktop for easy access
+    git clone https://github.com/KyZer-HADOC/youtube-video-downloader.git
+    cd youtube-video-downloader
 
-#### **macOS/Linux Users:**
-```bash
-chmod +x build.sh
-./build.sh
-```
+Or download the ZIP from GitHub and extract it.
 
-Or manually:
-```bash
-pip install -r requirements.txt
-python3 build.py
-```
+## 3. Install dependencies
 
-### Step 4: Run the App
+Open Command Prompt or PowerShell in the project folder and run:
 
-**Windows:**
-- Go to the `dist` folder
-- Double-click `YouTubeVideoDownloader.exe`
-- Create a shortcut and pin to taskbar if desired
+    python -m pip install -r requirements.txt
 
-**macOS:**
-- Go to the `dist` folder
-- Double-click `YouTubeVideoDownloader`
-- Or drag it to Applications folder
+## 4. Launch the desktop app
 
-**Linux:**
-- Go to the `dist` folder
-- Run `./YouTubeVideoDownloader`
+    python gui.py
 
----
+The app window is titled **KyZer Downloader**. Paste a YouTube URL, select a quality, choose a save folder, and click **Download Now**.
 
-## ✨ App Features
+## 5. Build a Windows EXE
 
-✅ Download YouTube videos in multiple formats
-✅ Extract audio as MP3
-✅ Choose video quality (Best, 1080p, 720p)
-✅ Modern graphical interface
-✅ Progress tracking
-✅ Easy folder navigation
-✅ No command-line knowledge needed
+Install PyInstaller:
 
----
+    python -m pip install pyinstaller
 
-## 📋 System Requirements
+Build the executable:
 
-- **Windows:** Windows 7 or later
-- **macOS:** macOS 10.9 or later
-- **Linux:** Most distributions
-- **FFmpeg:** Required for audio conversion
-  - Windows: Download from https://ffmpeg.org/download.html
-  - macOS: `brew install ffmpeg`
-  - Linux: `sudo apt-get install ffmpeg`
+    pyinstaller --noconfirm --clean --windowed --name "KyZer Downloader" gui.py
 
----
+The executable will be available in:
 
-## 🎯 Quick Start
+    dist\KyZer Downloader\KyZer Downloader.exe
 
-1. **Paste YouTube URL** in the URL field
-2. **Select video format** (Best Quality recommended)
-3. **Choose output location** (defaults to Downloads)
-4. **Click Download** and wait for completion
-5. **Check the output folder** for your downloaded video
+FFmpeg is not bundled automatically. Install it separately and add its bin folder to your Windows PATH if you need MP3 conversion or high-quality audio/video merging.
 
----
+## Supported formats
 
-## ⚙️ Troubleshooting
+- Best quality
+- 1080p HD
+- 720p HD
+- 480p SD
+- MP3 audio
 
-### "FFmpeg not found"
-- Install FFmpeg from https://ffmpeg.org/download.html
-- Make sure it's in your system PATH
+## Troubleshooting
 
-### "Python not found"
-- Install Python from https://www.python.org/
-- Make sure to check "Add Python to PATH"
+### yt-dlp is missing
 
-### Build fails
-- Delete the `build` and `dist` folders
-- Try running the build script again
-- Make sure you have enough disk space
+Run:
 
-### Video won't download
-- Check if the URL is valid
-- Some videos might be region-locked or private
-- Try updating yt-dlp: `pip install --upgrade yt-dlp`
+    python -m pip install --upgrade -r requirements.txt
 
----
+### FFmpeg is missing
 
-## 📝 Advanced Options (CLI)
+Install FFmpeg, add the folder containing ffmpeg.exe to PATH, then restart the app. MP3 conversion requires FFmpeg.
 
-If you prefer command-line, use:
-```bash
-python downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" -f 720p
-```
+### Download fails
 
-Options:
-- `-f best` - Best quality
-- `-f 720p` - 720p HD
-- `-f 1080p` - 1080p HD
-- `-f mp3` - Audio only
-- `-o ./path` - Custom output folder
+Check that the link is public and available, then update yt-dlp:
 
----
+    python -m pip install --upgrade yt-dlp
 
-## 🔗 Useful Links
+Some videos may be private, unavailable, region-restricted, or otherwise inaccessible.
 
-- FFmpeg Download: https://ffmpeg.org/download.html
-- Python Download: https://www.python.org/
-- GitHub Repository: https://github.com/KyZer-HADOC/youtube-video-downloader
-- yt-dlp Documentation: https://github.com/yt-dlp/yt-dlp
+## Legal note
 
----
-
-## 📞 Support
-
-If you encounter issues:
-1. Check the troubleshooting section above
-2. Create an issue on GitHub
-3. Make sure all dependencies are installed
-
----
-
-**Enjoy downloading your favorite YouTube videos!** 🎬📥
+Download only content you have permission to save, and follow YouTube's terms and applicable copyright laws.
