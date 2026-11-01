@@ -314,6 +314,8 @@ class KyZerYouBe(QMainWindow):
         title = "Saved link"
         if self.info and self.info.get("webpage_url") == target:
             title = str(self.info.get("title") or title)
+        elif getattr(self, "other_info", None) and self.other_info.get("webpage_url") == target:
+            title = str(self.other_info.get("title") or title)
         self.later_items.insert(0, {
             "title": title,
             "url": target,
@@ -1661,6 +1663,10 @@ class KyZerYouBe(QMainWindow):
             QMessageBox.information(self, APP_NAME, "Another video information request is running.")
             return
         browser = self.cookies_browser_combo.currentData()
+        self.other_info = None
+        self.other_title.setText("Loading information…")
+        self.other_thumbnail.setPixmap(QPixmap())
+        self.other_thumbnail.setText("Loading thumbnail…")
         self.other_info_status.setText("Checking this website for video information…")
         self.other_info_button.setEnabled(False)
         self._other_info_worker = InfoWorker(
@@ -1752,10 +1758,13 @@ class KyZerYouBe(QMainWindow):
         self.other_progress.setValue(0)
         self.other_percent.setText("0%")
         self.other_download_status.setText("Starting download…")
+        self.output_dir = output
 
+        parsed_url = urllib.parse.urlsplit(url)
+        safe_url_label = "{}{}".format(parsed_url.netloc, parsed_url.path[:120])
         get_app_logger().info(
             "Other DL started: url=%s video=%s audio=%s browser_cookies=%s",
-            url[:200], download_video, download_audio, browser or "off",
+            safe_url_label, download_video, download_audio, browser or "off",
         )
         self.download_worker = DownloadWorker(
             urls=[url],
