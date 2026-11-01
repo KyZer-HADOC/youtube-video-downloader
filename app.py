@@ -216,11 +216,17 @@ class KyZerYouBe(QMainWindow):
         self.info_worker: InfoWorker | None = None
         self.download_worker: DownloadWorker | None = None
         self.queue_urls: list[str] = []
+        self.settings_file = app_data_dir() / "settings.json"
+        self.app_settings = self._load_app_settings()
+        self.cookies_browser = self.app_settings.get("cookies_browser")
         self.history_file = app_data_dir() / "history.json"
         self.history: list[dict[str, str]] = self._load_history()
         self.later_file = app_data_dir() / "download_later.json"
         self.later_items: list[dict[str, str]] = self._load_later()
-        self.output_dir = str(Path.home() / "Downloads" / "KyZer YouBe")
+        self.output_dir = str(
+            self.app_settings.get("output_dir")
+            or (Path.home() / "Downloads" / "KyZer YouBe")
+        )
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         self.status_folder = ""
         self.whatsapp_installed = False
@@ -238,6 +244,13 @@ class KyZerYouBe(QMainWindow):
         self._show_page(0)
         self._refresh_history()
         self._detect_whatsapp_desktop(auto_scan=True)
+
+    def _load_app_settings(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.settings_file.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
 
     def _load_history(self) -> list[dict[str, str]]:
         try:
@@ -1058,6 +1071,9 @@ class KyZerYouBe(QMainWindow):
         self.cookies_browser_combo.addItem("Disabled", None)
         for browser in ("Chrome", "Edge", "Firefox", "Brave", "Opera", "Vivaldi"):
             self.cookies_browser_combo.addItem(browser, browser.lower())
+        saved_index = self.cookies_browser_combo.findData(self.cookies_browser)
+        if saved_index >= 0:
+            self.cookies_browser_combo.setCurrentIndex(saved_index)
         browser_row.addWidget(self.cookies_browser_combo, 1)
         connection_layout.addLayout(browser_row)
         connection_layout.addWidget(self._label(
@@ -1691,6 +1707,19 @@ class KyZerYouBe(QMainWindow):
         self.output_dir = folder
         self.output_edit.setText(folder)
         self.cookies_browser = self.cookies_browser_combo.currentData()
+        self.app_settings = {
+            "output_dir": folder,
+            "cookies_browser": self.cookies_browser,
+        }
+        try:
+            self.settings_file.write_text(
+                json.dumps(self.app_settings, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            get_app_logger().exception("Could not write application settings")
+            QMessageBox.warning(self, APP_NAME, "Settings were applied but could not be saved: {}".format(exc))
+            return
         get_app_logger().info(
             "Settings saved: download_folder=%s browser_cookies=%s",
             folder, self.cookies_browser or "off",
