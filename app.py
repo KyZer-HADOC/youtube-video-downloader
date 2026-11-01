@@ -48,6 +48,7 @@ from downloader import (
     detect_platform,
     format_duration,
     is_supported_url,
+    is_http_url,
     get_app_logger,
 )
 
@@ -99,15 +100,25 @@ class InfoWorker(QThread):
     succeeded = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, url: str, cookies_browser: str | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        cookies_browser: str | None = None,
+        allow_generic: bool = False,
+    ) -> None:
         super().__init__()
         self.url = url
         self.cookies_browser = cookies_browser
+        self.allow_generic = allow_generic
 
     def run(self) -> None:
         try:
             engine = YouTubeDownloader()
-            info = engine.get_video_info(self.url, cookies_browser=self.cookies_browser)
+            info = engine.get_video_info(
+                self.url,
+                cookies_browser=self.cookies_browser,
+                allow_generic=self.allow_generic,
+            )
             info["thumbnail_data"] = engine.fetch_thumbnail(info)
             self.succeeded.emit(info)
         except Exception as exc:
@@ -134,6 +145,7 @@ class DownloadWorker(QThread):
         playlist: bool,
         section: tuple[float, float] | None,
         cookies_browser: str | None,
+        allow_generic: bool = False,
     ) -> None:
         super().__init__()
         self.urls = urls
@@ -147,6 +159,7 @@ class DownloadWorker(QThread):
         self.playlist = playlist
         self.section = section
         self.cookies_browser = cookies_browser
+        self.allow_generic = allow_generic
         self.cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -187,6 +200,7 @@ class DownloadWorker(QThread):
                         progress_callback=report_progress,
                         cancel_event=self.cancel_event,
                         cookies_browser=self.cookies_browser,
+                        allow_generic=self.allow_generic,
                     )
                     results.append({"path": path, "url": url, "kind": media_kind})
 
@@ -268,7 +282,7 @@ class KyZerYouBe(QMainWindow):
                 item for item in items
                 if isinstance(item, dict)
                 and isinstance(item.get("url"), str)
-                and is_supported_url(item["url"])
+                and is_http_url(item["url"])
             ]
         except (OSError, json.JSONDecodeError):
             return []
@@ -286,10 +300,10 @@ class KyZerYouBe(QMainWindow):
 
     def add_link_for_later(self, url: str | None = None) -> None:
         target = (url or self.url_edit.text()).strip()
-        if not is_supported_url(target):
+        if not is_http_url(target):
             target = self.later_url_edit.text().strip() if hasattr(self, "later_url_edit") else target
-        if not is_supported_url(target):
-            QMessageBox.warning(self, APP_NAME, "Enter a valid YouTube, TikTok or Facebook link.")
+        if not is_http_url(target):
+            QMessageBox.warning(self, APP_NAME, "Enter a valid HTTP or HTTPS video/page link.")
             return
 
         key = target.rstrip("/")
@@ -359,21 +373,26 @@ class KyZerYouBe(QMainWindow):
 
     def open_later_item(self, item: QListWidgetItem) -> None:
         url = str(item.data(Qt.UserRole) or "")
-        if is_supported_url(url):
-            self.url_edit.setText(url)
-            self._show_page(0)
-            self.get_video_info()
+        if is_http_url(url):
+            if is_supported_url(url):
+                self.url_edit.setText(url)
+                self._show_page(0)
+                self.get_video_info()
+            else:
+                self.other_url_edit.setText(url)
+                self._show_page(2)
+                self.get_other_video_info()
 
     def download_later_selected(self) -> None:
         selected = self.later_list.selectedItems()
         urls = [str(item.data(Qt.UserRole) or "") for item in selected]
-        urls = [url for url in urls if is_supported_url(url)]
+        urls = [url for url in urls if is_http_url(url)]
         self._start_later_download(urls)
 
     def download_later_all(self) -> None:
         self._start_later_download([
             item.get("url", "") for item in self.later_items
-            if is_supported_url(item.get("url", ""))
+            if is_http_url(item.get("url", ""))
         ])
 
     def _start_later_download(self, urls: list[str]) -> None:
@@ -483,6 +502,7 @@ class KyZerYouBe(QMainWindow):
         nav_items = [
             ("⌂", "Downloader"),
             ("⇩", "Download Later"),
+            ("◎", "Other DL"),
             ("◉", "WhatsApp Status"),
             ("◷", "Download History"),
             ("⚙", "Settings"),
@@ -504,6 +524,7 @@ class KyZerYouBe(QMainWindow):
         self.pages = QStackedWidget()
         self.pages.addWidget(self._build_downloader_page())
         self.pages.addWidget(self._build_download_later_page())
+        self.pages.addWidget(self._build_other_dl_page())
         self.pages.addWidget(self._build_whatsapp_page())
         self.pages.addWidget(self._build_history_page())
         self.pages.addWidget(self._build_settings_page())
@@ -938,6 +959,151 @@ class KyZerYouBe(QMainWindow):
         self._refresh_later_list()
         return self._scroll_page(page)
 
+    def _build_other_dl_page(self) -> QWidget:
+        page, layout = self._page_container()
+        layout.addWidget(self._label("Other Website Downloader", "HeroTitle"))
+        layout.addWidget(self._label(
+            "Download video or audio from many websites beyond YouTube, TikTok and Facebook.",
+            "HeroSub"
+        ))
+
+        note, note_layout = make_card(padding=15)
+        note_text = self._label(
+            "Uses yt-dlp's supported site extractors and generic webpage detection. "
+            "This works with many video sites and direct media links, but not literally every website. "
+            "Private, DRM-protected, encrypted, login-only or unsupported players may not be downloadable.",
+            "Muted"
+        )
+        note_text.setWordWrap(True)
+        note_layout.addWidget(note_text)
+        layout.addWidget(note)
+
+        url_card, url_layout = make_card(padding=16)
+        url_layout.addWidget(self._label("WEBSITE OR VIDEO URL", "FieldLabel"))
+        url_row = QHBoxLayout()
+        self.other_url_edit = QLineEdit()
+        self.other_url_edit.setPlaceholderText("https://example.com/watch/video…")
+        self.other_url_edit.returnPressed.connect(self.get_other_video_info)
+        url_row.addWidget(self.other_url_edit, 1)
+        paste = QPushButton("▣  Paste")
+        paste.clicked.connect(
+            lambda: self.other_url_edit.setText(QApplication.clipboard().text().strip())
+        )
+        url_row.addWidget(paste)
+        self.other_info_button = QPushButton("⌕  Get Video Info")
+        self.other_info_button.setObjectName("Primary")
+        self.other_info_button.clicked.connect(self.get_other_video_info)
+        url_row.addWidget(self.other_info_button)
+        url_layout.addLayout(url_row)
+        self.other_info_status = self._label("Paste a website link and press Get Video Info.")
+        self.other_info_status.setWordWrap(True)
+        url_layout.addWidget(self.other_info_status)
+        layout.addWidget(url_card)
+
+        info_card, info_layout = make_card(padding=16)
+        info_row = QHBoxLayout()
+        self.other_thumbnail = QLabel("VIDEO")
+        self.other_thumbnail.setAlignment(Qt.AlignCenter)
+        self.other_thumbnail.setMinimumSize(210, 118)
+        self.other_thumbnail.setMaximumSize(260, 150)
+        self.other_thumbnail.setStyleSheet(
+            "background:#0b1018; color:#758398; border:1px dashed #354256; border-radius:9px;"
+        )
+        info_row.addWidget(self.other_thumbnail)
+        labels = QVBoxLayout()
+        self.other_title = self._label("No video selected", "MetaValue")
+        self.other_title.setWordWrap(True)
+        self.other_site = self._label("Website: —")
+        self.other_duration = self._label("Duration: —")
+        self.other_size = self._label("Estimated size: —")
+        for label in (self.other_title, self.other_site, self.other_duration, self.other_size):
+            label.setWordWrap(True)
+            labels.addWidget(label)
+        labels.addStretch(1)
+        info_row.addLayout(labels, 1)
+        info_layout.addLayout(info_row)
+        layout.addWidget(info_card)
+
+        options, options_layout = make_card(padding=16)
+        options_layout.addWidget(self._label("MEDIA OPTIONS", "SectionTitle"))
+        toggles = QHBoxLayout()
+        self.other_video_check = QCheckBox("Download Video")
+        self.other_video_check.setChecked(True)
+        self.other_audio_check = QCheckBox("Download Audio")
+        toggles.addWidget(self.other_video_check)
+        toggles.addWidget(self.other_audio_check)
+        toggles.addStretch(1)
+        options_layout.addLayout(toggles)
+
+        quality_row = QHBoxLayout()
+        quality_row.addWidget(self._label("VIDEO QUALITY", "FieldLabel"))
+        self.other_video_quality = QComboBox()
+        self.other_video_quality.addItems([
+            "Best quality", "4K (2160p)", "1440p", "1080p", "720p", "480p", "360p"
+        ])
+        quality_row.addWidget(self.other_video_quality, 2)
+        quality_row.addWidget(self._label("AUDIO QUALITY", "FieldLabel"))
+        self.other_audio_quality = QComboBox()
+        self.other_audio_quality.addItems(["320 kbps", "256 kbps", "192 kbps", "128 kbps"])
+        self.other_audio_quality.setCurrentText("192 kbps")
+        self.other_audio_quality.setEnabled(False)
+        quality_row.addWidget(self.other_audio_quality, 2)
+        options_layout.addLayout(quality_row)
+        self.other_video_check.toggled.connect(self.other_video_quality.setEnabled)
+        self.other_audio_check.toggled.connect(self.other_audio_quality.setEnabled)
+
+        extras = QHBoxLayout()
+        self.other_subtitles_check = QCheckBox("Download subtitles (if available)")
+        self.other_thumbnail_check = QCheckBox("Embed thumbnail")
+        extras.addWidget(self.other_subtitles_check)
+        extras.addWidget(self.other_thumbnail_check)
+        extras.addStretch(1)
+        options_layout.addLayout(extras)
+
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(self._label("SAVE TO", "FieldLabel"))
+        self.other_output_edit = QLineEdit(self.output_dir)
+        self.other_output_edit.setMinimumWidth(260)
+        folder_row.addWidget(self.other_output_edit, 1)
+        browse = QPushButton("Browse")
+        browse.clicked.connect(self.browse_other_output)
+        folder_row.addWidget(browse)
+        options_layout.addLayout(folder_row)
+        layout.addWidget(options)
+
+        progress, progress_layout = make_card(padding=16)
+        progress_layout.addWidget(self._label("DOWNLOAD PROGRESS", "SectionTitle"))
+        p_row = QHBoxLayout()
+        self.other_progress = QProgressBar()
+        self.other_progress.setRange(0, 100)
+        p_row.addWidget(self.other_progress, 1)
+        self.other_percent = self._label("0%", "MetaValue")
+        p_row.addWidget(self.other_percent)
+        progress_layout.addLayout(p_row)
+        self.other_download_status = self._label("Ready.")
+        self.other_download_status.setWordWrap(True)
+        progress_layout.addWidget(self.other_download_status)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.other_cancel_button = QPushButton("Cancel")
+        self.other_cancel_button.setObjectName("Danger")
+        self.other_cancel_button.setEnabled(False)
+        self.other_cancel_button.clicked.connect(self.cancel_other_download)
+        actions.addWidget(self.other_cancel_button)
+        save_later = QPushButton("◷  Save for Later")
+        save_later.clicked.connect(
+            lambda: self.add_link_for_later(self.other_url_edit.text())
+        )
+        actions.addWidget(save_later)
+        self.other_download_button = QPushButton("⬇  DOWNLOAD NOW")
+        self.other_download_button.setObjectName("Primary")
+        self.other_download_button.clicked.connect(self.start_other_download)
+        actions.addWidget(self.other_download_button)
+        progress_layout.addLayout(actions)
+        layout.addWidget(progress)
+        layout.addStretch(1)
+        return self._scroll_page(page)
+
     def _build_whatsapp_page(self) -> QWidget:
         page, layout = self._page_container()
         layout.addWidget(self._label("WhatsApp Status Saver", "HeroTitle"))
@@ -1108,6 +1274,8 @@ class KyZerYouBe(QMainWindow):
         self.pages.setCurrentIndex(index)
         if index == 1:
             self._refresh_later_list()
+        elif index == 2 and hasattr(self, "other_output_edit"):
+            self.other_output_edit.setText(self.output_dir)
         for i, button in enumerate(self.nav_buttons):
             button.setChecked(i == index)
 
@@ -1393,6 +1561,7 @@ class KyZerYouBe(QMainWindow):
             playlist=self.playlist_check.isChecked(),
             section=section,
             cookies_browser=browser,
+            allow_generic=any(not is_supported_url(url) for url in urls),
         )
         self.download_worker.progress.connect(self._download_progress)
         self.download_worker.succeeded.connect(self._download_succeeded)
@@ -1482,6 +1651,186 @@ class KyZerYouBe(QMainWindow):
             self.download_status.setText("Cancelling after the current transfer chunk…")
             self.download_worker.cancel()
             self.cancel_button.setEnabled(False)
+
+    def get_other_video_info(self) -> None:
+        url = self.other_url_edit.text().strip()
+        if not is_http_url(url):
+            QMessageBox.warning(self, APP_NAME, "Enter a valid HTTP or HTTPS website/video URL.")
+            return
+        if self.info_worker and self.info_worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "Another video information request is running.")
+            return
+        browser = self.cookies_browser_combo.currentData()
+        self.other_info_status.setText("Checking this website for video information…")
+        self.other_info_button.setEnabled(False)
+        self._other_info_worker = InfoWorker(
+            url, cookies_browser=browser, allow_generic=True
+        )
+        self._other_info_worker.succeeded.connect(self._other_info_ready)
+        self._other_info_worker.failed.connect(self._other_info_failed)
+        self._other_info_worker.finished.connect(self._other_info_finished)
+        self.info_worker = self._other_info_worker
+        self._other_info_worker.start()
+
+    def _other_info_ready(self, info: dict[str, Any]) -> None:
+        self.other_info = info
+        self.other_title.setText(str(info.get("title") or "Untitled video"))
+        self.other_site.setText("Website: {}".format(info.get("platform") or "Other Website"))
+        self.other_duration.setText("Duration: {}".format(info.get("duration_text") or "—"))
+        self.other_size.setText("Estimated size: {}".format(info.get("filesize_text") or "Unknown"))
+        image = QPixmap()
+        data = info.get("thumbnail_data")
+        if data and image.loadFromData(data):
+            self.other_thumbnail.setPixmap(image.scaled(
+                self.other_thumbnail.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            ))
+            self.other_thumbnail.setText("")
+        else:
+            self.other_thumbnail.setPixmap(QPixmap())
+            self.other_thumbnail.setText("Thumbnail unavailable")
+        self.other_info_status.setText(
+            "Information loaded. Select video/audio options and press Download Now."
+        )
+
+    def _other_info_failed(self, message: str) -> None:
+        get_app_logger().error("Other DL info extraction failed: %s", message)
+        self.other_info_status.setText(
+            "Could not extract this page. Some websites are not supported. Check log.txt."
+        )
+        QMessageBox.critical(
+            self, "Other DL - Get Video Info",
+            message + "\n\nDiagnostic log: " + str(app_data_dir() / "log.txt")
+        )
+
+    def _other_info_finished(self) -> None:
+        self.other_info_button.setEnabled(True)
+        self.info_worker = None
+
+    def browse_other_output(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose save folder", self.other_output_edit.text()
+        )
+        if folder:
+            self.other_output_edit.setText(folder)
+
+    def start_other_download(self) -> None:
+        url = self.other_url_edit.text().strip()
+        if not is_http_url(url):
+            QMessageBox.warning(self, APP_NAME, "Paste a valid HTTP or HTTPS website/video URL.")
+            return
+        if self.download_worker and self.download_worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "A download is already running.")
+            return
+        download_video = self.other_video_check.isChecked()
+        download_audio = self.other_audio_check.isChecked()
+        if not download_video and not download_audio:
+            QMessageBox.warning(self, APP_NAME, "Select video, audio, or both.")
+            return
+
+        output = self.other_output_edit.text().strip() or self.output_dir
+        try:
+            Path(output).expanduser().mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            get_app_logger().exception("Other DL could not create output folder")
+            QMessageBox.critical(self, APP_NAME, str(exc))
+            return
+
+        video_quality = {
+            "4K (2160p)": "2160p",
+            "1440p": "1440p",
+            "1080p": "1080p",
+            "720p": "720p",
+            "480p": "480p",
+            "360p": "360p",
+        }.get(self.other_video_quality.currentText(), "best")
+        audio_quality = self.other_audio_quality.currentText().split()[0]
+        browser = self.cookies_browser_combo.currentData()
+        self.other_download_button.setEnabled(False)
+        self.other_cancel_button.setEnabled(True)
+        self.other_progress.setValue(0)
+        self.other_percent.setText("0%")
+        self.other_download_status.setText("Starting download…")
+
+        get_app_logger().info(
+            "Other DL started: url=%s video=%s audio=%s browser_cookies=%s",
+            url[:200], download_video, download_audio, browser or "off",
+        )
+        self.download_worker = DownloadWorker(
+            urls=[url],
+            output_dir=output,
+            download_video=download_video,
+            download_audio=download_audio,
+            video_quality=video_quality,
+            audio_quality=audio_quality,
+            subtitles=self.other_subtitles_check.isChecked(),
+            thumbnail=self.other_thumbnail_check.isChecked(),
+            playlist=False,
+            section=None,
+            cookies_browser=browser,
+            allow_generic=True,
+        )
+        self.download_worker.progress.connect(self._other_download_progress)
+        self.download_worker.succeeded.connect(self._other_download_succeeded)
+        self.download_worker.failed.connect(self._other_download_failed)
+        self.download_worker.cancelled.connect(self._other_download_cancelled)
+        self.download_worker.finished.connect(self._other_download_finished)
+        self.download_worker.start()
+
+    def _other_download_progress(self, data: dict[str, Any]) -> None:
+        if data.get("status") == "processing":
+            self.other_download_status.setText("Media received — merging/processing…")
+            return
+        percent = int(max(0, min(100, float(data.get("percent") or 0))))
+        self.other_progress.setValue(percent)
+        self.other_percent.setText("{}%".format(percent))
+        self.other_download_status.setText(
+            "{} downloading • {} • {} • ETA {}".format(
+                data.get("media_kind", "MEDIA"),
+                data.get("downloaded_text", "—"),
+                data.get("speed_text", "—"),
+                data.get("eta_text", "—"),
+            )
+        )
+
+    def _other_download_succeeded(self, results: list[dict[str, str]]) -> None:
+        self.other_progress.setValue(100)
+        self.other_percent.setText("100%")
+        self.other_download_status.setText(
+            "Completed {} file(s) successfully.".format(len(results))
+        )
+        self._remove_downloaded_from_later(results)
+        for result in results:
+            path = str(result.get("path") or "")
+            url = str(result.get("url") or self.other_url_edit.text().strip())
+            kind = str(result.get("kind") or "MEDIA").title()
+            self._save_history("{} ({})".format(Path(path).name, kind), path, url)
+        QMessageBox.information(
+            self, APP_NAME, "Downloaded {} file(s) successfully.".format(len(results))
+        )
+
+    def _other_download_failed(self, message: str) -> None:
+        get_app_logger().error("Other DL download failed: %s", message)
+        self.other_download_status.setText("Download failed. Check log.txt.")
+        QMessageBox.critical(
+            self, "Other DL download error",
+            message + "\n\nDiagnostic log: " + str(app_data_dir() / "log.txt")
+        )
+
+    def _other_download_cancelled(self) -> None:
+        self.other_download_status.setText("Download cancelled.")
+
+    def _other_download_finished(self) -> None:
+        self.other_download_button.setEnabled(True)
+        self.other_cancel_button.setEnabled(False)
+        self.download_worker = None
+
+    def cancel_other_download(self) -> None:
+        if self.download_worker and self.download_worker.isRunning():
+            self.download_worker.cancel()
+            self.other_cancel_button.setEnabled(False)
+            self.other_download_status.setText("Cancelling download…")
 
     def _detect_whatsapp_desktop(self, auto_scan: bool = False) -> None:
         local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
