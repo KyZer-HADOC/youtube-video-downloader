@@ -1,66 +1,147 @@
 # KyZer YouBe
 
-**KyZer YouBe** is a Windows desktop media utility with a dark red interface.
+A Windows desktop video and audio downloader by **KyZer_HADOC**.
 
-## Platforms and tools
+[![Download for Windows](https://img.shields.io/badge/Download-Windows%20Setup-red?logo=windows)](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/KyZer-HADOC/youtube-video-downloader)](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Source%20Code-black?logo=github)](https://github.com/KyZer-HADOC/youtube-video-downloader)
 
-- **YouTube, TikTok and Facebook:** public videos and supported posts with quality selection.
-- **Other DL:** try thousands of sites supported by yt-dlp, plus generic webpage and direct media URLs. Compatibility depends on the site and how its player serves video.
-- **Separate video/audio downloads:** choose either or both, with independent video resolution and MP3 bitrate settings.
-- **Download Later:** save links persistently, close the app, and download selected or all links later.
-- **Thumbnail and media details:** load a post thumbnail, title, creator, duration and available size.
-- **In-app preview:** attempts to play the source stream without downloading the whole video first.
-- **Clip selection:** select Start and End points to download a section.
-- **Progress details:** percent, downloaded size, total size, remaining size, speed and ETA.
-- **Extras:** subtitles when available, embedded thumbnails, playlists, active queue and local download history.
-- **WhatsApp Desktop detection:** checks whether WhatsApp is installed and enables local status-media scanning when a folder is available.
+## Download and install (recommended)
 
-No downloader can guarantee every website works. Private, encrypted, DRM-protected, login-only, CAPTCHA-protected or unsupported players may block extraction. Respect the site's terms and only save content you are allowed to download.
+**You do not need a GitHub account or special repository access to download this public project.**
 
-## Other DL
+1. Open the [Latest Releases page](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest).
+2. Under **Assets**, download **KyZer-YouBe-Setup.exe**.
+3. Double-click the downloaded installer.
+4. Follow the setup steps. It installs for your Windows user and does not need administrator access.
+5. Launch **KyZer YouBe** from the Start Menu.
 
-Open Other DL, paste an HTTP or HTTPS webpage/video link, press Get Video Info, choose video/audio and quality, then Download Now. The engine uses yt-dlp's available site-specific extractors first and generic webpage detection as a fallback. Direct media URLs such as MP4 or HLS links can work too. This is broad site support, not a promise that every URL on the internet is downloadable.
+[**Download KyZer YouBe for Windows — Setup.exe**](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest/download/KyZer-YouBe-Setup.exe)
 
-## Download Later
+> Download the Setup.exe from Releases for the ready-to-install application. The Git commands below download the source-code project; they do not download the compiled Setup.exe.
 
-Use Save for Later on Downloader or Other DL, or paste a URL into the Download Later tab. Links are kept in the local app data folder at %LOCALAPPDATA%\KyZer YouBe\download_later.json and remain after closing the app. Successfully downloaded links are removed automatically; you can also remove them manually.
+## Download the source using Git
 
-## TikTok and HTTP 429 troubleshooting
+This is useful for developers or anyone who wants the project files.
 
-Some services, especially TikTok, may temporarily rate-limit automated requests or require a browser session. Open the post in your normal browser, finish any CAPTCHA/verification, then in Settings select the same browser under Browser Session and retry. The app reads cookies only after you explicitly select a browser. A 429 response is imposed by the source service, so waiting before retrying may be necessary.
+### 1. Install Git
 
-The app adds retry delays and backoff for metadata and subtitle requests. Subtitle failures are treated as optional and should not cancel a successful media download. A severe source-side block can still prevent the whole request.
+Open PowerShell or Command Prompt and check whether Git is installed:
+
+```powershell
+git --version
+```
+
+If Windows says that Git is not recognised, install Git for Windows from [git-scm.com](https://git-scm.com/download/win), then reopen the terminal.
+
+### 2. Clone this public repository
+
+Run:
+
+```powershell
+git clone --depth 1 https://github.com/KyZer-HADOC/youtube-video-downloader.git
+cd youtube-video-downloader
+```
+
+Git downloads the latest project source into a folder named `youtube-video-downloader`. No username, password, personal access token or collaborator invitation is required for this public repository.
+
+### 3. Run from source (optional)
+
+Install Python 3.12, then run these commands inside the cloned folder:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python app.py
+```
+
+If PowerShell blocks virtual-environment activation, use Command Prompt instead:
+
+```bat
+.venv\Scripts\activate.bat
+python -m pip install -r requirements.txt
+python app.py
+```
+
+### 4. Update an existing Git clone
+
+Open a terminal inside the cloned `youtube-video-downloader` folder and run:
+
+```powershell
+git pull
+```
+
+## Features
+
+- **YouTube, TikTok and Facebook:** download supported public videos and posts.
+- **Other DL:** use yt-dlp's supported extractors and generic webpage detection for many additional sites and direct media URLs.
+- **Separate video/audio options:** download video, MP3 audio, or both; select video resolution and audio bitrate separately.
+- **Download Later:** save links locally and download them another time.
+- **Video information and thumbnails:** display available titles, creators, durations, sizes and thumbnails.
+- **Preview:** attempt to play an available source stream inside the app.
+- **Clip selector:** choose start and end times to download a section.
+- **Progress information:** percentage, downloaded size, total size, remaining size, speed and ETA.
+- **Extras:** subtitles when available, embedded thumbnails, playlist downloads, queue and download history.
+- **Diagnostics:** rotating `log.txt` file for troubleshooting.
+
+No downloader can support literally every website. Private, DRM-protected, encrypted, login-only, CAPTCHA-protected or unsupported players may prevent extraction. Follow the website's rules and only download content you have permission to save.
+
+## WhatsApp Status — important
+
+The WhatsApp tab has a different limitation:
+
+- KyZer YouBe checks whether **WhatsApp Desktop is installed on this PC**.
+- WhatsApp Desktop does not provide a public API that lets this app fetch your account's Status updates directly.
+- The app can scan a local status-media folder only when that folder actually exists and is accessible on the PC.
+- If no such folder is exposed, the app cannot automatically fetch statuses from WhatsApp's servers. You may need to export/copy status files to the PC yourself.
+
+The app does not ask for your WhatsApp password, QR login or private account session.
+
+## TikTok and HTTP 429 errors
+
+Some platforms temporarily limit automated requests or require a browser session.
+
+1. Open the same post in your normal browser and complete any verification prompt.
+2. In KyZer YouBe, open **Settings → Browser Session**.
+3. Select the browser you used. Cookies are read only when you explicitly select a browser.
+4. Retry after a short wait. An HTTP 429 response is a source-side rate limit, so the app cannot guarantee an immediate fix.
 
 ## Diagnostic log
 
-A rotating diagnostic log is written locally to:
+The app writes a rotating log file here:
 
+```text
 %LOCALAPPDATA%\KyZer YouBe\log.txt
+```
 
-Open Settings and press Open log.txt to view extractor, thumbnail, subtitle, download and runtime errors. The file is kept on this PC.
+Open **Settings → Open log.txt** to inspect errors. The log stays on your PC.
 
-## WhatsApp Status
+## Build the Windows installer (developers)
 
-KyZer YouBe checks whether WhatsApp Desktop is installed. WhatsApp Desktop does not expose a supported public status-download API or a guaranteed .Statuses folder. The app scans a real local status-media folder only if one exists or has been exported by the user. It does not treat private chat caches as status media and does not request account credentials or QR sessions.
+The GitHub Actions workflow builds the Windows installer automatically whenever changes are pushed to `main`.
 
-## Run from source
+To build locally on Windows:
 
-1. Install Python 3.10 or newer.
-2. Install dependencies: python -m pip install -r requirements.txt
-3. Launch: python app.py
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install pyinstaller pillow
+python build_windows.py
+```
 
-## Build on Windows
+Then compile `Setup.iss` using [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
-Install dependencies and PyInstaller, run python build_windows.py, then compile Setup.iss with Inno Setup 6. GitHub Actions performs these steps and publishes Setup.exe to Releases.
+## Windows security note
 
-## FFmpeg
+The installer is built for per-user installation and does not request administrator access. Unless a trusted Authenticode signing certificate is configured for the build, Windows SmartScreen may show an unrecognised-app warning. Do not bypass security warnings unless you have verified that the installer came from this official repository.
 
-The Windows bundle includes FFmpeg through imageio-ffmpeg for format merging, audio extraction and clip cutting.
+## Links
 
-## Windows security
-
-The installer is per-user and does not request administrator rights. Without a trusted Authenticode certificate, Windows SmartScreen may still show an unrecognized-app warning for a new download.
+- **Repository:** https://github.com/KyZer-HADOC/youtube-video-downloader
+- **Latest Windows installer:** https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest
+- **Build status:** https://github.com/KyZer-HADOC/youtube-video-downloader/actions
 
 ## Responsible use
 
-Only download content you have permission to save. Follow platform terms, copyright laws and privacy rules.
+Respect creators' rights, privacy, copyright law and each source platform's terms of service.
