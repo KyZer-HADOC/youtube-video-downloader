@@ -1,13 +1,17 @@
 """Download and media-information layer for KyZer YouBe.
 
 Uses yt-dlp for public YouTube, TikTok and Facebook URLs. WhatsApp Status
-media is handled as local files exported/copied from the user's own device.
+media is handled as local files made available on this PC by the user.
 """
 
 from __future__ import annotations
 
+import logging
+import logging.handlers
 import os
 import shutil
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -22,6 +26,60 @@ PLATFORM_HOSTS = {
     "TikTok": ("tiktok.com",),
     "Facebook": ("facebook.com", "fb.watch"),
 }
+
+
+def get_app_logger() -> logging.Logger:
+    """Return the shared rotating diagnostic logger."""
+    logger = logging.getLogger("kyzer_yoube")
+    if not logger.handlers:
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        folder = base / "KyZer YouBe"
+        folder.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            folder / "log.txt",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=2,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(threadName)s | %(message)s"
+        ))
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+    return logger
+
+
+class _YtDlpLogger:
+    """Forward yt-dlp diagnostics into KyZer YouBe's log.txt."""
+
+    def debug(self, message: str) -> None:
+        get_app_logger().debug("yt-dlp: %s", message)
+
+    def warning(self, message: str) -> None:
+        get_app_logger().warning("yt-dlp: %s", message)
+
+    def error(self, message: str) -> None:
+        get_app_logger().error("yt-dlp: %s", message)
+
+
+def _safe_url_label(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+        return "{}{}".format(parsed.netloc, parsed.path[:100])
+    except Exception:
+        return "<invalid URL>"
+
+
+def _browser_cookie_option(browser: str | None) -> dict[str, Any]:
+    """Only read browser cookies when the user explicitly selected a browser."""
+    name = (browser or "").strip().lower()
+    if name in ("none", "off", "disabled", ""):
+        return {}
+    allowed = {"chrome", "edge", "firefox", "brave", "opera", "vivaldi"}
+    if name not in allowed:
+        return {}
+    return {"cookiesfrombrowser": (name,)}
 
 
 def detect_platform(url: str) -> str:
@@ -86,11 +144,50 @@ class YouTubeDownloader:
             if candidate and Path(candidate).exists():
                 return candidate
         except Exception:
-            pass
+            get_app_logger().exception("Could not locate bundled FFmpeg")
         return shutil.which("ffmpeg")
 
-    def get_video_info(self, url: str) -> dict[str, Any]:
-        """Fetch metadata and a direct progressive URL for optional streaming preview."""
+    @staticmethod
+    def fetch_thumbnail(info: dict[str, Any]) -> bytes | None:
+        """Fetch a thumbnail with source-page headers and a browser-like User-Agent."""
+        candidates = info.get("thumbnail_candidates") or []
+        if not candidates and info.get("thumbnail"):
+            candidates = [{"url": info["thumbnail"], "http_headers": {}}]
+
+        for candidate in candidates:
+            image_url = candidate.get("url")
+            if not image_url:
+                continue
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/130.0.0.0 Safari/537.36"
+                ),
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Referer": info.get("webpage_url") or "",
+            }
+            headers.update(candidate.get("http_headers") or {})
+            try:
+                request = urllib.request.Request(image_url, headers=headers)
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    data = response.read(8 * 1024 * 1024 + 1)
+                if data and len(data) <= 8 * 1024 * 1024:
+                    get_app_logger().info(
+                        "Loaded thumbnail (%s bytes) for %s",
+                        len(data), _safe_url_label(info.get("webpage_url", "")),
+                    )
+                    return data
+            except Exception as exc:
+                get_app_logger().warning("Thumbnail request failed: %s", exc)
+        return None
+
+    def get_video_info(
+        self,
+        url: str,
+        cookies_browser: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch metadata and a preview stream for optional in-app playback."""
         if not is_supported_url(url):
             raise ValueError("This link is not a supported YouTube, TikTok or Facebook URL.")
 
@@ -99,17 +196,47 @@ class YouTubeDownloader:
         except ImportError as exc:
             raise RuntimeError("The yt-dlp engine is missing. Reinstall KyZer YouBe.") from exc
 
-        options = {
+        platform = detect_platform(url)
+        get_app_logger().info(
+            "Fetching video information: platform=%s url=%s browser_cookies=%s",
+            platform, _safe_url_label(url), cookies_browser or "off",
+        )
+        options: dict[str, Any] = {
             "quiet": True,
-            "no_warnings": True,
+            "no_warnings": False,
+            "logger": _YtDlpLogger(),
             "skip_download": True,
             "noplaylist": True,
             "ignoreerrors": False,
-            "socket_timeout": 25,
+            "socket_timeout": 35,
             "extract_flat": False,
+            "retries": 4,
+            "extractor_retries": 4,
+            "sleep_interval_requests": 1.0,
         }
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=False)
+        options.update(_browser_cookie_option(cookies_browser))
+
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as exc:
+            get_app_logger().exception(
+                "Video info extraction failed: platform=%s url=%s",
+                platform, _safe_url_label(url),
+            )
+            message = str(exc)
+            if "429" in message or "Too Many Requests" in message:
+                raise RuntimeError(
+                    "The platform is rate-limiting requests (HTTP 429). Wait a while and retry. "
+                    "For a CAPTCHA/verification block, open the post in your browser, solve it, "
+                    "then select that browser under Settings > Browser cookies and retry. "
+                    "The same network/IP must be used. See log.txt for technical details.\n\n"
+                    + message
+                ) from exc
+            raise RuntimeError(
+                "Could not read this post. It may be private, unavailable, or temporarily blocked. "
+                "Update the app and check log.txt for the exact extractor error.\n\n" + message
+            ) from exc
 
         if not info:
             raise RuntimeError("The platform did not return video information.")
@@ -119,27 +246,51 @@ class YouTubeDownloader:
                 raise RuntimeError("No playable videos were found in this playlist.")
             info = first
             if not info.get("title"):
-                info = ydl.extract_info(info.get("url") or url, download=False)
+                with yt_dlp.YoutubeDL(options) as ydl:
+                    info = ydl.extract_info(info.get("url") or url, download=False)
 
         formats = info.get("formats") or []
-        progressive = [
+        video_formats = [
             item for item in formats
             if item.get("url")
             and item.get("vcodec") not in (None, "none")
-            and item.get("acodec") not in (None, "none")
             and not item.get("has_drm")
         ]
-        progressive.sort(
+        progressive = [
+            item for item in video_formats
+            if item.get("acodec") not in (None, "none")
+        ]
+        preview_candidates = progressive or video_formats
+        preview_candidates.sort(
             key=lambda item: (
                 int(item.get("height") or 0),
                 float(item.get("tbr") or 0),
             )
         )
-        preview = progressive[-1] if progressive else None
+        preview = preview_candidates[-1] if preview_candidates else None
+
+        thumbnails = info.get("thumbnails") or []
+        thumbnails = sorted(
+            (item for item in thumbnails if item.get("url")),
+            key=lambda item: (
+                int(item.get("width") or 0) * int(item.get("height") or 0),
+                int(item.get("preference") or 0),
+            ),
+            reverse=True,
+        )
+        thumbnail_url = str(info.get("thumbnail") or "")
+        if thumbnail_url and all(item.get("url") != thumbnail_url for item in thumbnails):
+            thumbnails.insert(0, {"url": thumbnail_url, "http_headers": {}})
+
         size = info.get("filesize") or info.get("filesize_approx")
         if not size and preview:
             size = preview.get("filesize") or preview.get("filesize_approx")
 
+        get_app_logger().info(
+            "Video info loaded: platform=%s title=%r formats=%d thumbnail_candidates=%d preview=%s",
+            platform, str(info.get("title") or "")[:100], len(formats),
+            len(thumbnails), bool(preview),
+        )
         return {
             "id": str(info.get("id") or ""),
             "title": str(info.get("title") or "Untitled video"),
@@ -148,9 +299,10 @@ class YouTubeDownloader:
             "duration_text": format_duration(info.get("duration")),
             "view_count": info.get("view_count"),
             "description": str(info.get("description") or "")[:3000],
-            "thumbnail": str(info.get("thumbnail") or ""),
+            "thumbnail": thumbnail_url or (thumbnails[0].get("url") if thumbnails else ""),
+            "thumbnail_candidates": thumbnails,
             "webpage_url": str(info.get("webpage_url") or url),
-            "platform": detect_platform(url),
+            "platform": platform,
             "filesize": size,
             "filesize_text": format_bytes(size),
             "width": (preview or {}).get("width") or info.get("width"),
@@ -165,12 +317,14 @@ class YouTubeDownloader:
         quality: str = "best",
         output_template: str | None = None,
         audio_only: bool = False,
+        audio_quality: str = "192",
         download_subtitles: bool = False,
         embed_thumbnail: bool = False,
         allow_playlist: bool = False,
         section: tuple[float, float] | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
         cancel_event: Any = None,
+        cookies_browser: str | None = None,
     ) -> str:
         """Download a supported URL, optionally cutting a selected time range."""
         if not is_supported_url(url):
@@ -195,7 +349,7 @@ class YouTubeDownloader:
             postprocessors = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
-                "preferredquality": "192",
+                "preferredquality": str(audio_quality or "192").replace(" kbps", ""),
             }]
         else:
             postprocessors = []
@@ -219,16 +373,20 @@ class YouTubeDownloader:
             "noplaylist": not allow_playlist,
             "quiet": True,
             "no_warnings": False,
+            "logger": _YtDlpLogger(),
             "noprogress": True,
             "windowsfilenames": True,
             "continuedl": True,
             "overwrites": False,
             "retries": 5,
             "fragment_retries": 5,
-            "socket_timeout": 30,
+            "extractor_retries": 4,
+            "sleep_interval_requests": 1.0,
+            "socket_timeout": 35,
             "merge_output_format": "mp4",
             "postprocessors": postprocessors,
         }
+        options.update(_browser_cookie_option(cookies_browser))
 
         if ffmpeg:
             options["ffmpeg_location"] = ffmpeg
@@ -240,6 +398,8 @@ class YouTubeDownloader:
                 "subtitleslangs": ["en.*", "si.*"],
                 "subtitlesformat": "srt/best",
                 "embedsubtitles": True,
+                "sleep_interval_subtitles": 5.0,
+                "skip_unavailable_fragments": True,
             })
 
         if embed_thumbnail:
@@ -303,16 +463,29 @@ class YouTubeDownloader:
                 })
 
         options["progress_hooks"] = [progress_hook]
-
-        with yt_dlp.YoutubeDL(options) as ydl:
-            result = ydl.download([url])
+        get_app_logger().info(
+            "Starting download: platform=%s url=%s audio_only=%s subtitles=%s cookies=%s",
+            detect_platform(url), _safe_url_label(url), audio_only,
+            download_subtitles, cookies_browser or "off",
+        )
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                result = ydl.download([url])
+        except DownloadCancelled:
+            raise
+        except Exception:
+            get_app_logger().exception(
+                "Download failed: platform=%s url=%s", detect_platform(url), _safe_url_label(url)
+            )
+            raise
 
         if cancel_event is not None and cancel_event.is_set():
             raise DownloadCancelled("Download cancelled by user.")
         if result != 0:
             raise RuntimeError(
                 "The platform could not complete this download. The post may be private, "
-                "unavailable, region-restricted, or temporarily blocked."
+                "unavailable, region-restricted, or temporarily blocked. "
+                "Check log.txt for the exact error."
             )
 
         candidates = sorted(
