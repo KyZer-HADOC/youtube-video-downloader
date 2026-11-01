@@ -30,6 +30,8 @@ def main() -> int:
         "--name", "KyZer YouBe",
         "--icon", str(ICO_ICON),
         "--add-data", "{};.".format(PNG_ICON),
+        # TikTok needs curl_cffi browser impersonation; include its native DLLs and package data.
+        "--collect-all", "curl_cffi",
         # yt-dlp loads extractors dynamically, so keep its extractor package.
         "--collect-all", "yt_dlp",
         # FFmpeg is loaded dynamically by the downloader; include its runtime and binary.
