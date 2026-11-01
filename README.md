@@ -52,12 +52,14 @@ The app does not ask for your WhatsApp password, QR login or private account ses
 
 ## TikTok and HTTP 429 errors
 
-Some platforms temporarily limit automated requests or require a browser session.
+KyZer YouBe bundles **curl_cffi browser impersonation support** for TikTok, which is needed when TikTok checks browser/TLS fingerprints. The app logs whether this support loaded; the yt-dlp debug output should list `curl_cffi` under **Request Handlers**.
+
+Some platforms still temporarily limit automated requests or require a browser session.
 
 1. Open the same post in your normal browser and complete any verification prompt.
 2. In KyZer YouBe, open **Settings → Browser Session**.
 3. Select the browser you used. Cookies are read only when you explicitly select a browser.
-4. Retry after a short wait. An HTTP 429 response is a source-side rate limit, so the app cannot guarantee an immediate fix.
+4. Retry after a short wait. An HTTP 429 response or TikTok challenge page can be a source-side block, so the app cannot guarantee an immediate fix.
 
 ## Diagnostic log
 
