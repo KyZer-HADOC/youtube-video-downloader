@@ -6,72 +6,23 @@ A Windows desktop video and audio downloader by **KyZer_HADOC**.
 [![GitHub Release](https://img.shields.io/github/v/release/KyZer-HADOC/youtube-video-downloader)](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest)
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Source%20Code-black?logo=github)](https://github.com/KyZer-HADOC/youtube-video-downloader)
 
-## Download and install (recommended)
+## Download KyZer YouBe (no code or Git required)
 
-**You do not need a GitHub account or special repository access to download this public project.**
+**Normal users: you do not need to clone the repository, type commands, create a GitHub account or request access.** Just download the ready-made Windows installer.
 
-1. Open the [Latest Releases page](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest).
-2. Under **Assets**, download **KyZer-YouBe-Setup.exe**.
-3. Double-click the downloaded installer.
-4. Follow the setup steps. It installs for your Windows user and does not need administrator access.
-5. Launch **KyZer YouBe** from the Start Menu.
+1. Open the [KyZer YouBe GitHub repository](https://github.com/KyZer-HADOC/youtube-video-downloader).
+2. Find **Releases** on the repository page and open the latest release. You can also [open the latest release directly](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest).
+3. On the release page, scroll down to the section called **Assets**.
+4. Expand **Assets** if it is collapsed.
+5. Click **KyZer-YouBe-Setup.exe**. Your browser will start downloading the installer.
+6. When the download finishes, open **KyZer-YouBe-Setup.exe** and follow the setup steps.
+7. Launch **KyZer YouBe** from the Windows Start Menu.
 
-[**Download KyZer YouBe for Windows — Setup.exe**](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest/download/KyZer-YouBe-Setup.exe)
+### One-click download
 
-> Download the Setup.exe from Releases for the ready-to-install application. The Git commands below download the source-code project; they do not download the compiled Setup.exe.
+[**⬇ Download KyZer-YouBe-Setup.exe**](https://github.com/KyZer-HADOC/youtube-video-downloader/releases/latest/download/KyZer-YouBe-Setup.exe)
 
-## Download the source using Git
-
-This is useful for developers or anyone who wants the project files.
-
-### 1. Install Git
-
-Open PowerShell or Command Prompt and check whether Git is installed:
-
-```powershell
-git --version
-```
-
-If Windows says that Git is not recognised, install Git for Windows from [git-scm.com](https://git-scm.com/download/win), then reopen the terminal.
-
-### 2. Clone this public repository
-
-Run:
-
-```powershell
-git clone --depth 1 https://github.com/KyZer-HADOC/youtube-video-downloader.git
-cd youtube-video-downloader
-```
-
-Git downloads the latest project source into a folder named `youtube-video-downloader`. No username, password, personal access token or collaborator invitation is required for this public repository.
-
-### 3. Run from source (optional)
-
-Install Python 3.12, then run these commands inside the cloned folder:
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python app.py
-```
-
-If PowerShell blocks virtual-environment activation, use Command Prompt instead:
-
-```bat
-.venv\Scripts\activate.bat
-python -m pip install -r requirements.txt
-python app.py
-```
-
-### 4. Update an existing Git clone
-
-Open a terminal inside the cloned `youtube-video-downloader` folder and run:
-
-```powershell
-git pull
-```
+> **Important:** In the **Assets** section, choose **KyZer-YouBe-Setup.exe**. Do not choose the source-code ZIP or TAR.GZ files if you just want to install the app.
 
 ## Features
 
@@ -113,10 +64,64 @@ Some platforms temporarily limit automated requests or require a browser session
 The app writes a rotating log file here:
 
 ```text
-%LOCALAPPDATA%\KyZer YouBe\log.txt
+%LOCALAPPDATA%\\KyZer YouBe\\log.txt
 ```
 
 Open **Settings → Open log.txt** to inspect errors. The log stays on your PC.
+
+<details>
+<summary><strong>For developers: download and run the source code with Git</strong></summary>
+
+This section is optional. You only need it if you want to inspect or modify the project source. For the ready-to-install app, use the **Assets → KyZer-YouBe-Setup.exe** download instructions above.
+
+### 1. Install Git
+
+Open PowerShell or Command Prompt and check whether Git is installed:
+
+```powershell
+git --version
+```
+
+If Windows says that Git is not recognised, install Git for Windows from [git-scm.com](https://git-scm.com/download/win), then reopen the terminal.
+
+### 2. Clone this public repository
+
+```powershell
+git clone --depth 1 https://github.com/KyZer-HADOC/youtube-video-downloader.git
+cd youtube-video-downloader
+```
+
+No username, password, personal access token or collaborator invitation is required for this public repository.
+
+### 3. Run from source (optional)
+
+Install Python 3.12, then run these commands inside the cloned folder:
+
+```powershell
+py -3.12 -m venv .venv
+.\\.venv\\Scripts\\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python app.py
+```
+
+If PowerShell blocks virtual-environment activation, use Command Prompt instead:
+
+```bat
+.venv\\Scripts\\activate.bat
+python -m pip install -r requirements.txt
+python app.py
+```
+
+### 4. Update an existing Git clone
+
+Open a terminal inside the cloned `youtube-video-downloader` folder and run:
+
+```powershell
+git pull
+```
+
+</details>
 
 ## Build the Windows installer (developers)
 
