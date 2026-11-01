@@ -30,15 +30,16 @@ def main() -> int:
         "--name", "KyZer YouBe",
         "--icon", str(ICO_ICON),
         "--add-data", "{};.".format(PNG_ICON),
+        # yt-dlp loads extractors dynamically, so keep its extractor package.
         "--collect-all", "yt_dlp",
-        "--collect-all", "imageio_ffmpeg",
-        "--collect-all", "PySide6",
+        # Collect only the FFmpeg binary/package resources, not unrelated Qt modules.
+        "--collect-binaries", "imageio_ffmpeg",
         "--hidden-import", "PySide6.QtMultimedia",
         "--hidden-import", "PySide6.QtMultimediaWidgets",
         "--hidden-import", "certifi",
         str(ROOT / "app.py"),
     ]
-    print("Building KyZer YouBe for Windows…", flush=True)
+    print("Building size-optimised KyZer YouBe for Windows…", flush=True)
     completed = subprocess.run(args, cwd=ROOT, check=False)
     if completed.returncode != 0:
         return completed.returncode
