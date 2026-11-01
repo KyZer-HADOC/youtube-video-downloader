@@ -210,9 +210,18 @@ class YouTubeDownloader:
             "ignoreerrors": False,
             "socket_timeout": 35,
             "extract_flat": False,
-            "retries": 4,
-            "extractor_retries": 4,
-            "sleep_interval_requests": 1.0,
+            # Slow down metadata requests to reduce platform-side rate limiting.
+            "retries": 8,
+            "extractor_retries": 8,
+            "sleep_interval_requests": 3.0,
+            "sleep_interval": 5.0,
+            "max_sleep_interval": 10.0,
+            "retry_sleep": {
+                "http": "linear=5::5",
+                "extractor": "linear=3::3",
+                "fragment": "linear=3::3",
+            },
+            "verbose": True,
         }
         options.update(_browser_cookie_option(cookies_browser))
 
@@ -378,10 +387,18 @@ class YouTubeDownloader:
             "windowsfilenames": True,
             "continuedl": True,
             "overwrites": False,
-            "retries": 5,
-            "fragment_retries": 5,
-            "extractor_retries": 4,
-            "sleep_interval_requests": 1.0,
+            "retries": 8,
+            "fragment_retries": 8,
+            "extractor_retries": 8,
+            # Be gentle with subtitle and metadata endpoints; aggressive retries worsen 429 blocks.
+            "sleep_interval_requests": 3.0,
+            "sleep_interval": 5.0,
+            "max_sleep_interval": 10.0,
+            "retry_sleep": {
+                "http": "linear=5::5",
+                "extractor": "linear=3::3",
+                "fragment": "linear=3::3",
+            },
             "socket_timeout": 35,
             "merge_output_format": "mp4",
             "postprocessors": postprocessors,
@@ -398,7 +415,7 @@ class YouTubeDownloader:
                 "subtitleslangs": ["en.*", "si.*"],
                 "subtitlesformat": "srt/best",
                 "embedsubtitles": True,
-                "sleep_interval_subtitles": 5.0,
+                "sleep_interval_subtitles": 20.0,
                 "skip_unavailable_fragments": True,
             })
 
