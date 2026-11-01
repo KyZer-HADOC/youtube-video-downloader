@@ -120,18 +120,18 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.1
-          name: KyZer YouBe v2.0.1 (Smaller Installer)
+          tag_name: v2.0.2
+          name: KyZer YouBe v2.0.2 (Smaller Installer)
           make_latest: true
           prerelease: false
           overwrite_files: true
           files: installer/KyZer-YouBe-Setup.exe
           body: |
-            KyZer YouBe v2.0.1 — reduced-size Windows installer.
+            KyZer YouBe v2.0.2 — Other DL, Download Later and rate-limit improvements.
 
-            Includes YouTube, TikTok and Facebook downloads; local WhatsApp Status Saver; media info; preview; clip selection; progress details; history and settings.
+            Includes YouTube, TikTok, Facebook and additional yt-dlp-supported websites; local WhatsApp Desktop detection; separate video/audio options; Download Later; media info; preview; clip selection; progress details and logs.
 
-            Only the Setup.exe installer is published. The oversized duplicate portable package has been removed.
+            Only the Setup.exe installer is published; the oversized duplicate portable package is not included.
             If no trusted code-signing certificate is configured, Windows SmartScreen may show an unrecognized-app warning.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
