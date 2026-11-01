@@ -1,46 +1,60 @@
-# KyZer Downloader
+# KyZer YouBe
 
-A lightweight Windows desktop YouTube downloader with a modern Tkinter interface and yt-dlp as its download engine.
+**KyZer YouBe** is a Windows-first, all-in-one media utility with a dark red desktop interface.
 
-## Features
+## Platforms and tools
 
-- Download videos in best available quality, 1080p, 720p, or 480p.
-- Extract audio as MP3.
-- Choose the output folder.
-- Live progress, download speed, and estimated time remaining.
-- Background downloading keeps the interface responsive.
-- FFmpeg support for format merging and MP3 conversion.
+- **YouTube:** videos and supported public posts with quality selection.
+- **TikTok:** supported public videos and posts.
+- **Facebook:** supported public videos, reels and posts.
+- **WhatsApp Status Saver:** saves status photos/videos already copied or exported from your own Android device to a local folder.
+- **Video preview:** requests metadata and attempts to stream a preview without first downloading the whole video.
+- **Clip selection:** set Start and End points and download only that section.
+- **Progress details:** percent, downloaded size, total size, remaining size, speed and ETA.
+- **Extras:** MP3 audio, subtitles (English/Sinhala when available), embedded thumbnails, playlist option, download queue and local history.
+
+Downloads depend on the source being publicly accessible and on current yt-dlp extractor support. Private posts, login walls, age restrictions, regional restrictions and platform changes can prevent a download.
+
+## WhatsApp Status
+
+WhatsApp does not provide a public desktop status-download link. The Status Saver page works with files available locally on your own device. On Android, copy the WhatsApp media .Statuses folder to the PC, then select that copied folder in the app. The app does not ask for WhatsApp passwords, QR sessions or account cookies.
 
 ## Run from source
 
 1. Install Python 3.10 or newer.
-2. Clone this repository.
-3. Install dependencies:
+2. Install dependencies:
 
        python -m pip install -r requirements.txt
 
-4. Start the app:
+3. Launch:
 
-       python gui.py
+       python app.py
+
+## Build on Windows
+
+Install dependencies and PyInstaller:
+
+       python -m pip install -r requirements.txt
+       python -m pip install pyinstaller
+
+Build the app folder:
+
+       python build_windows.py
+
+Build Setup.exe using Inno Setup 6:
+
+       ISCC.exe Setup.iss
+
+GitHub Actions performs these steps automatically and publishes the Windows installer to the Releases page.
 
 ## FFmpeg
 
-FFmpeg is recommended for merging separate video/audio streams and is required for MP3 conversion. Install FFmpeg and make sure the ffmpeg command is available in your system PATH. Without FFmpeg, the downloader falls back to a single-file video format where possible.
+The Windows bundle includes FFmpeg through imageio-ffmpeg, so users do not need to install it separately for normal clip cutting, audio extraction or format merging.
 
-## Build a Windows executable
+## Windows security and signing
 
-Install PyInstaller:
+The installer uses a per-user install location and does not request administrator rights. GitHub Actions can Authenticode-sign the app and installer when the repository has the WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD secrets configured with a trusted code-signing certificate. Without a trusted signing certificate, Windows SmartScreen may still show an unrecognized-app warning for a new download; no installer setting can guarantee that warning will never appear.
 
-       python -m pip install pyinstaller
+## Responsible use
 
-Then build:
-
-       pyinstaller --noconfirm --clean --windowed --name "KyZer Downloader" gui.py
-
-The executable will be created in the dist folder. FFmpeg must still be installed separately unless you bundle it yourself.
-
-## Update yt-dlp
-
-       python -m pip install --upgrade yt-dlp
-
-Download only content you have permission to save, and follow YouTube's terms and applicable copyright laws.
+Only download content you have permission to save. Follow the source platform's terms and applicable copyright laws. Respect creators' rights and user privacy.
