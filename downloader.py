@@ -95,12 +95,21 @@ def detect_platform(url: str) -> str:
     return "Unsupported"
 
 
-def is_supported_url(url: str) -> bool:
+def is_http_url(url: str) -> bool:
+    """Accept a syntactically valid HTTP(S) URL for generic website extraction."""
     try:
         parsed = urlsplit(url.strip())
-    except ValueError:
+        return (
+            parsed.scheme.lower() in ("http", "https")
+            and bool(parsed.hostname)
+            and not any(char.isspace() for char in url.strip())
+        )
+    except (ValueError, TypeError):
         return False
-    return parsed.scheme in ("http", "https") and detect_platform(url) != "Unsupported"
+
+
+def is_supported_url(url: str) -> bool:
+    return is_http_url(url) and detect_platform(url) != "Unsupported"
 
 
 def format_bytes(value: Any) -> str:
@@ -186,10 +195,15 @@ class YouTubeDownloader:
         self,
         url: str,
         cookies_browser: str | None = None,
+        allow_generic: bool = False,
     ) -> dict[str, Any]:
-        """Fetch metadata and a preview stream for optional in-app playback."""
-        if not is_supported_url(url):
-            raise ValueError("This link is not a supported YouTube, TikTok or Facebook URL.")
+        """Fetch metadata for supported platforms or an arbitrary HTTP(S) page."""
+        valid = is_supported_url(url) or (allow_generic and is_http_url(url))
+        if not valid:
+            raise ValueError(
+                "Enter a valid HTTP or HTTPS video/page link. "
+                "Use Other DL for sites outside YouTube, TikTok and Facebook."
+            )
 
         try:
             import yt_dlp
@@ -197,6 +211,8 @@ class YouTubeDownloader:
             raise RuntimeError("The yt-dlp engine is missing. Reinstall KyZer YouBe.") from exc
 
         platform = detect_platform(url)
+        if platform == "Unsupported" and allow_generic:
+            platform = "Other Website"
         get_app_logger().info(
             "Fetching video information: platform=%s url=%s browser_cookies=%s",
             platform, _safe_url_label(url), cookies_browser or "off",
@@ -334,10 +350,15 @@ class YouTubeDownloader:
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
         cancel_event: Any = None,
         cookies_browser: str | None = None,
+        allow_generic: bool = False,
     ) -> str:
-        """Download a supported URL, optionally cutting a selected time range."""
-        if not is_supported_url(url):
-            raise ValueError("This link is not a supported YouTube, TikTok or Facebook URL.")
+        """Download supported platforms or a generic HTTP(S) page if enabled."""
+        valid = is_supported_url(url) or (allow_generic and is_http_url(url))
+        if not valid:
+            raise ValueError(
+                "Enter a valid HTTP or HTTPS video/page link. "
+                "Use Other DL for websites outside YouTube, TikTok and Facebook."
+            )
 
         try:
             import yt_dlp
@@ -480,9 +501,12 @@ class YouTubeDownloader:
                 })
 
         options["progress_hooks"] = [progress_hook]
+        platform = detect_platform(url)
+        if platform == "Unsupported" and allow_generic:
+            platform = "Other Website"
         get_app_logger().info(
             "Starting download: platform=%s url=%s audio_only=%s subtitles=%s cookies=%s",
-            detect_platform(url), _safe_url_label(url), audio_only,
+            platform, _safe_url_label(url), audio_only,
             download_subtitles, cookies_browser or "off",
         )
         try:
