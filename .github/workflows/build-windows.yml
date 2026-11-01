@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: kyzer-yoube-windows-release
+  cancel-in-progress: true
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -36,19 +40,7 @@ jobs:
       - name: Build Windows application folder
         run: python build_windows.py
 
-      - name: Install Inno Setup
-        run: choco install innosetup --yes --no-progress
-
-      - name: Build Setup.exe
-        shell: pwsh
-        run: |
-          $compiler = "PROGRAMFILES_X86\Inno Setup 6\ISCC.exe"
-          $compiler = $compiler.Replace("PROGRAMFILES_X86", $env:ProgramFiles(x86))
-          if (-not (Test-Path $compiler)) { throw "Inno Setup compiler was not found: $compiler" }
-          & $compiler "Setup.iss"
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
-
-      - name: Sign app and installer if a trusted certificate is configured
+      - name: Sign app executable when a trusted certificate is configured
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
@@ -57,22 +49,56 @@ jobs:
           if ($env:WINDOWS_CERTIFICATE_BASE64 -and $env:WINDOWS_CERTIFICATE_PASSWORD) {
             $certPath = Join-Path $env:RUNNER_TEMP "kyzer-codesign.pfx"
             [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-            $kits = Join-Path $env:ProgramFiles "Windows Kits\10\bin"
-            $signTool = Get-ChildItem $kits -Filter signtool.exe -Recurse |
-              Where-Object { $_.FullName -match "\\x64\\signtool.exe$" } |
+            $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+            $kits = Join-Path $programFilesX86 "Windows Kits\10\bin"
+            $signTool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -Recurse |
+              Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
               Sort-Object FullName -Descending | Select-Object -First 1
             if (-not $signTool) { throw "Windows SDK signtool.exe was not found." }
             $appExe = Join-Path $PWD "dist\KyZer YouBe\KyZer YouBe.exe"
-            $setupExe = Join-Path $PWD "installer\KyZer-YouBe-Setup.exe"
             & $signTool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD $appExe
             if ($LASTEXITCODE -ne 0) { throw "Signing the app executable failed." }
+            "Trusted Authenticode signature applied to app executable."
+          } else {
+            Write-Warning "No trusted signing certificate secrets found. App executable will be unsigned."
+          }
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build Setup.exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "installer" | Out-Null
+          $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+          $compiler = Join-Path $programFilesX86 "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) { throw "Inno Setup compiler was not found: $compiler" }
+          & $compiler "Setup.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+
+      - name: Sign Setup.exe when a trusted certificate is configured
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:WINDOWS_CERTIFICATE_BASE64 -and $env:WINDOWS_CERTIFICATE_PASSWORD) {
+            $certPath = Join-Path $env:RUNNER_TEMP "kyzer-codesign.pfx"
+            [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+            $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+            $kits = Join-Path $programFilesX86 "Windows Kits\10\bin"
+            $signTool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -Recurse |
+              Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $signTool) { throw "Windows SDK signtool.exe was not found." }
+            $setupExe = Join-Path $PWD "installer\KyZer-YouBe-Setup.exe"
             & $signTool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD $setupExe
             if ($LASTEXITCODE -ne 0) { throw "Signing the Setup executable failed." }
             & $signTool.FullName verify /pa /v $setupExe
             if ($LASTEXITCODE -ne 0) { throw "Setup signature verification failed." }
-            "Trusted Authenticode signature applied."
+            "Trusted Authenticode signature applied and verified."
           } else {
-            Write-Warning "No trusted signing certificate secrets found. This build is unsigned; SmartScreen may display an unrecognized-app warning."
+            Write-Warning "No trusted signing certificate secrets found. Setup.exe is unsigned; SmartScreen may show an unrecognized-app warning."
           }
 
       - name: Package portable ZIP
