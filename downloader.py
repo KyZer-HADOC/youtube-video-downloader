@@ -27,6 +27,13 @@ PLATFORM_HOSTS = {
     "Facebook": ("facebook.com", "fb.watch"),
 }
 
+# A Chrome 145 UA is a documented fallback for TikTok's short challenge page.
+TIKTOK_COMPAT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/145.0.0.0 Safari/537.36"
+)
+
 
 def get_app_logger() -> logging.Logger:
     """Return the shared rotating diagnostic logger."""
@@ -278,6 +285,8 @@ class YouTubeDownloader:
             "verbose": True,
         }
         options.update(_browser_cookie_option(cookies_browser))
+        if platform == "TikTok":
+            options.setdefault("http_headers", {})["User-Agent"] = TIKTOK_COMPAT_USER_AGENT
 
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
@@ -465,6 +474,8 @@ class YouTubeDownloader:
             "postprocessors": postprocessors,
         }
         options.update(_browser_cookie_option(cookies_browser))
+        if detect_platform(url) == "TikTok":
+            options.setdefault("http_headers", {})["User-Agent"] = TIKTOK_COMPAT_USER_AGENT
 
         if ffmpeg:
             options["ffmpeg_location"] = ffmpeg
