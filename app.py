@@ -48,6 +48,7 @@ from downloader import (
     detect_platform,
     format_duration,
     is_supported_url,
+    get_app_logger,
 )
 
 
@@ -98,15 +99,19 @@ class InfoWorker(QThread):
     succeeded = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, cookies_browser: str | None = None) -> None:
         super().__init__()
         self.url = url
+        self.cookies_browser = cookies_browser
 
     def run(self) -> None:
         try:
-            info = YouTubeDownloader().get_video_info(self.url)
+            engine = YouTubeDownloader()
+            info = engine.get_video_info(self.url, cookies_browser=self.cookies_browser)
+            info["thumbnail_data"] = engine.fetch_thumbnail(info)
             self.succeeded.emit(info)
         except Exception as exc:
+            get_app_logger().exception("Get Video Info worker failed")
             self.failed.emit(str(exc))
 
 
@@ -120,22 +125,28 @@ class DownloadWorker(QThread):
         self,
         urls: list[str],
         output_dir: str,
-        quality: str,
-        audio_only: bool,
+        download_video: bool,
+        download_audio: bool,
+        video_quality: str,
+        audio_quality: str,
         subtitles: bool,
         thumbnail: bool,
         playlist: bool,
         section: tuple[float, float] | None,
+        cookies_browser: str | None,
     ) -> None:
         super().__init__()
         self.urls = urls
         self.output_dir = output_dir
-        self.quality = quality
-        self.audio_only = audio_only
+        self.download_video = download_video
+        self.download_audio = download_audio
+        self.video_quality = video_quality
+        self.audio_quality = audio_quality
         self.subtitles = subtitles
         self.thumbnail = thumbnail
         self.playlist = playlist
         self.section = section
+        self.cookies_browser = cookies_browser
         self.cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -144,38 +155,49 @@ class DownloadWorker(QThread):
     def run(self) -> None:
         try:
             engine = YouTubeDownloader(self.output_dir)
-            paths = []
+            results = []
             total = len(self.urls)
             for index, url in enumerate(self.urls, start=1):
-                if self.cancel_event.is_set():
-                    raise DownloadCancelled("Download queue cancelled by user.")
+                tasks = []
+                if self.download_video:
+                    tasks.append(("VIDEO", self.video_quality, False))
+                if self.download_audio:
+                    tasks.append(("AUDIO", "audio", True))
 
-                def report_progress(data: dict[str, Any]) -> None:
-                    payload = dict(data)
-                    payload["queue_index"] = index
-                    payload["queue_total"] = total
-                    self.progress.emit(payload)
+                for media_kind, quality, audio_only in tasks:
+                    if self.cancel_event.is_set():
+                        raise DownloadCancelled("Download queue cancelled by user.")
 
-                path = engine.download_video(
-                    url,
-                    quality=self.quality,
-                    audio_only=self.audio_only,
-                    download_subtitles=self.subtitles,
-                    embed_thumbnail=self.thumbnail,
-                    allow_playlist=self.playlist,
-                    section=self.section,
-                    progress_callback=report_progress,
-                    cancel_event=self.cancel_event,
-                )
-                paths.append(path)
+                    def report_progress(data: dict[str, Any]) -> None:
+                        payload = dict(data)
+                        payload["queue_index"] = index
+                        payload["queue_total"] = total
+                        payload["media_kind"] = media_kind
+                        self.progress.emit(payload)
+
+                    path = engine.download_video(
+                        url,
+                        quality=quality,
+                        audio_only=audio_only,
+                        audio_quality=self.audio_quality,
+                        download_subtitles=self.subtitles and media_kind == "VIDEO",
+                        embed_thumbnail=self.thumbnail and media_kind == "VIDEO",
+                        allow_playlist=self.playlist,
+                        section=self.section,
+                        progress_callback=report_progress,
+                        cancel_event=self.cancel_event,
+                        cookies_browser=self.cookies_browser,
+                    )
+                    results.append({"path": path, "url": url, "kind": media_kind})
 
             if self.cancel_event.is_set():
                 self.cancelled.emit()
             else:
-                self.succeeded.emit(paths)
+                self.succeeded.emit(results)
         except DownloadCancelled:
             self.cancelled.emit()
         except Exception as exc:
+            get_app_logger().exception("Download worker failed")
             self.failed.emit(str(exc))
 
 
@@ -199,6 +221,7 @@ class KyZerYouBe(QMainWindow):
         self.output_dir = str(Path.home() / "Downloads" / "KyZer YouBe")
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         self.status_folder = ""
+        self.whatsapp_installed = False
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -207,10 +230,12 @@ class KyZerYouBe(QMainWindow):
         self.player.durationChanged.connect(self._duration_changed)
         self.player.positionChanged.connect(self._position_changed)
         self.player.errorOccurred.connect(self._player_error)
+        self.player.playbackStateChanged.connect(self._playback_state_changed)
 
         self._build_shell()
         self._show_page(0)
         self._refresh_history()
+        self._detect_whatsapp_desktop(auto_scan=True)
 
     def _load_history(self) -> list[dict[str, str]]:
         try:
@@ -502,6 +527,14 @@ class KyZerYouBe(QMainWindow):
 
         details_card, details_layout = make_card(padding=16)
         details_layout.addWidget(self._label("VIDEO INFORMATION", "SectionTitle"))
+        self.thumbnail_preview = QLabel("Thumbnail will appear here")
+        self.thumbnail_preview.setAlignment(Qt.AlignCenter)
+        self.thumbnail_preview.setMinimumSize(220, 120)
+        self.thumbnail_preview.setMaximumHeight(150)
+        self.thumbnail_preview.setStyleSheet(
+            "background:#0b1018; color:#758398; border:1px dashed #354256; border-radius:9px;"
+        )
+        details_layout.addWidget(self.thumbnail_preview)
         self.video_title = self._label("No video selected", "MetaValue")
         self.video_title.setWordWrap(True)
         self.creator_label = self._label("Creator: —")
@@ -559,22 +592,41 @@ class KyZerYouBe(QMainWindow):
 
         options_card, options_layout = make_card(padding=15)
         options_layout.addWidget(self._label("DOWNLOAD SETTINGS", "SectionTitle"))
+
+        media_selection = QHBoxLayout()
+        self.video_check = QCheckBox("Download Video")
+        self.video_check.setChecked(True)
+        self.audio_check = QCheckBox("Download Audio")
+        self.audio_check.setChecked(False)
+        media_selection.addWidget(self.video_check)
+        media_selection.addWidget(self.audio_check)
+        media_selection.addStretch(1)
+        options_layout.addLayout(media_selection)
+
         options_row = QHBoxLayout()
         self.quality_combo = QComboBox()
         self.quality_combo.addItems([
-            "Best quality", "4K (2160p)", "1440p", "1080p", "720p", "480p", "360p", "MP3 audio"
+            "Best quality", "4K (2160p)", "1440p", "1080p", "720p", "480p", "360p"
         ])
         self.quality_combo.setCurrentText("Best quality")
-        options_row.addWidget(self._label("QUALITY", "FieldLabel"))
+        self.audio_quality_combo = QComboBox()
+        self.audio_quality_combo.addItems(["320 kbps", "256 kbps", "192 kbps", "128 kbps"])
+        self.audio_quality_combo.setCurrentText("192 kbps")
+        options_row.addWidget(self._label("VIDEO QUALITY", "FieldLabel"))
         options_row.addWidget(self.quality_combo, 2)
+        options_row.addWidget(self._label("AUDIO QUALITY", "FieldLabel"))
+        options_row.addWidget(self.audio_quality_combo, 2)
         self.output_edit = QLineEdit(self.output_dir)
         self.output_edit.setMinimumWidth(220)
         options_row.addWidget(self._label("SAVE TO", "FieldLabel"))
-        options_row.addWidget(self.output_edit, 4)
+        options_row.addWidget(self.output_edit, 3)
         self.browse_output_button = QPushButton("Browse")
         self.browse_output_button.clicked.connect(self.browse_output)
         options_row.addWidget(self.browse_output_button)
         options_layout.addLayout(options_row)
+        self.video_check.toggled.connect(self.quality_combo.setEnabled)
+        self.audio_check.toggled.connect(self.audio_quality_combo.setEnabled)
+        self.audio_quality_combo.setEnabled(False)
 
         extras = QHBoxLayout()
         self.subtitles_check = QCheckBox("Download subtitles (EN / SI)")
@@ -660,15 +712,35 @@ class KyZerYouBe(QMainWindow):
 
         notice, notice_layout = make_card(padding=17)
         notice_label = QLabel(
-            "HOW THIS WORKS\n"
-            "WhatsApp does not provide a public desktop status-download link. "
-            "This saver works with status media you have access to on your own device. "
-            "On Android, copy the .Statuses folder to your PC, then select that folder below. "
-            "No WhatsApp passwords, QR sessions or private account tokens are requested."
+            "KyZer YouBe automatically checks whether WhatsApp Desktop is installed on this PC. "
+            "It can scan a local status-media folder if WhatsApp or a user export makes one "
+            "available. WhatsApp Desktop does not expose a supported public status-download API, "
+            "so the app will not pretend that private chat-cache files are statuses."
         )
         notice_label.setWordWrap(True)
         notice_label.setStyleSheet("color:#bdc7d4; font-size:11px; line-height:1.5;")
         notice_layout.addWidget(notice_label)
+        self.whatsapp_status_label = QLabel("Checking WhatsApp Desktop…")
+        self.whatsapp_status_label.setWordWrap(True)
+        self.whatsapp_status_label.setStyleSheet(
+            "color:#45d49a; font-size:11px; font-weight:700; padding-top:5px;"
+        )
+        notice_layout.addWidget(self.whatsapp_status_label)
+        wa_actions = QHBoxLayout()
+        self.open_whatsapp_button = QPushButton("Open WhatsApp Desktop")
+        self.open_whatsapp_button.clicked.connect(self.open_whatsapp_desktop)
+        wa_actions.addWidget(self.open_whatsapp_button)
+        self.detect_whatsapp_button = QPushButton("Detect Again")
+        self.detect_whatsapp_button.clicked.connect(
+            lambda: self._detect_whatsapp_desktop(auto_scan=True)
+        )
+        wa_actions.addWidget(self.detect_whatsapp_button)
+        self.install_whatsapp_button = QPushButton("Get WhatsApp for PC")
+        self.install_whatsapp_button.setObjectName("Primary")
+        self.install_whatsapp_button.clicked.connect(self.get_whatsapp_desktop)
+        wa_actions.addWidget(self.install_whatsapp_button)
+        wa_actions.addStretch(1)
+        notice_layout.addLayout(wa_actions)
         layout.addWidget(notice)
 
         folder_card, folder_layout = make_card()
@@ -680,10 +752,12 @@ class KyZerYouBe(QMainWindow):
         browse = QPushButton("Browse")
         browse.clicked.connect(self.browse_status_folder)
         row.addWidget(browse)
+        self.browse_status_button = browse
         scan = QPushButton("↻  Scan Folder")
         scan.setObjectName("Primary")
         scan.clicked.connect(self.scan_status_folder)
         row.addWidget(scan)
+        self.scan_status_button = scan
         folder_layout.addLayout(row)
         layout.addWidget(folder_card)
 
@@ -701,6 +775,7 @@ class KyZerYouBe(QMainWindow):
         save_row.addStretch(1)
         self.save_status_button = QPushButton("Save Selected to Downloads")
         self.save_status_button.setObjectName("Primary")
+        self.save_status_button.setEnabled(False)
         self.save_status_button.clicked.connect(self.save_selected_status)
         save_row.addWidget(self.save_status_button)
         results_layout.addLayout(save_row)
@@ -751,6 +826,33 @@ class KyZerYouBe(QMainWindow):
         save.clicked.connect(self.save_settings)
         card_layout.addWidget(save, alignment=Qt.AlignRight)
         layout.addWidget(card)
+
+        connection, connection_layout = make_card()
+        connection_layout.addWidget(self._label("BROWSER SESSION (OPTIONAL)", "SectionTitle"))
+        browser_row = QHBoxLayout()
+        browser_row.addWidget(self._label("Browser cookies", "FieldLabel"))
+        self.cookies_browser_combo = QComboBox()
+        self.cookies_browser_combo.addItem("Disabled", None)
+        for browser in ("Chrome", "Edge", "Firefox", "Brave", "Opera", "Vivaldi"):
+            self.cookies_browser_combo.addItem(browser, browser.lower())
+        browser_row.addWidget(self.cookies_browser_combo, 1)
+        connection_layout.addLayout(browser_row)
+        connection_layout.addWidget(self._label(
+            "For a TikTok/website verification or rate-limit block: open the post in that "
+            "browser, complete its CAPTCHA, then select the same browser here. Cookies are "
+            "only read when you explicitly select a browser. Close the browser first if its "
+            "cookie database is locked.",
+            "Muted"
+        ))
+        log_row = QHBoxLayout()
+        log_row.addWidget(self._label("Troubleshooting", "FieldLabel"))
+        log_row.addStretch(1)
+        open_log = QPushButton("Open log.txt")
+        open_log.clicked.connect(self.open_log_file)
+        log_row.addWidget(open_log)
+        connection_layout.addLayout(log_row)
+        layout.addWidget(connection)
+
         about, about_layout = make_card()
         about_layout.addWidget(self._label("ABOUT KYZER YOUBE", "SectionTitle"))
         about_layout.addWidget(self._label(
@@ -804,7 +906,12 @@ class KyZerYouBe(QMainWindow):
         self.info_button.setText("Getting info…")
         self.info_status.setText("Fetching title, duration, formats and preview stream…")
         self.header_status.setText("●  FETCHING VIDEO INFO")
-        self.info_worker = InfoWorker(url)
+        browser = self.cookies_browser_combo.currentData()
+        get_app_logger().info(
+            "Get Video Info clicked: platform=%s browser_cookies=%s",
+            detect_platform(url), browser or "off",
+        )
+        self.info_worker = InfoWorker(url, cookies_browser=browser)
         self.info_worker.succeeded.connect(self._info_ready)
         self.info_worker.failed.connect(self._info_failed)
         self.info_worker.finished.connect(self._info_thread_finished)
@@ -818,6 +925,23 @@ class KyZerYouBe(QMainWindow):
 
     def _info_ready(self, info: dict[str, Any]) -> None:
         self.info = info
+        thumbnail_data = info.get("thumbnail_data")
+        if thumbnail_data:
+            image = QPixmap()
+            if image.loadFromData(thumbnail_data):
+                self.thumbnail_preview.setPixmap(image.scaled(
+                    self.thumbnail_preview.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                ))
+                self.thumbnail_preview.setText("")
+            else:
+                self.thumbnail_preview.setPixmap(QPixmap())
+                self.thumbnail_preview.setText("Thumbnail unavailable")
+        else:
+            self.thumbnail_preview.setPixmap(QPixmap())
+            self.thumbnail_preview.setText("Thumbnail unavailable")
+
         self.video_title.setText(info.get("title", "Untitled video"))
         self.creator_label.setText("Creator: {}".format(info.get("uploader") or "—"))
         self.duration_label.setText("Duration: {}".format(info.get("duration_text") or "—"))
@@ -827,11 +951,6 @@ class KyZerYouBe(QMainWindow):
         width = info.get("width")
         resolution = "{} × {}".format(width, height) if width and height else "Adaptive / unknown"
         self.resolution_label.setText("Preview quality: {}".format(resolution))
-        self.info_status.setText(
-            "{} information loaded. Press Play to preview without saving the video.".format(
-                info.get("platform", "Video")
-            )
-        )
         self.preview_platform.setText(info.get("platform", "VIDEO").upper())
         self.preview_platform.setStyleSheet("color:#45d49a; font-weight:800;")
 
@@ -841,30 +960,56 @@ class KyZerYouBe(QMainWindow):
             self.end_spin.setValue(float(duration))
             self.start_spin.setMaximum(float(duration))
 
-        if info.get("preview_url"):
-            self.player.stop()
-            self.player.setSource(QUrl(info["preview_url"]))
+        preview_url = info.get("preview_url")
+        self.player.stop()
+        if preview_url:
+            self.player.setSource(QUrl(preview_url))
             self.preview_stack.setCurrentWidget(self.video_widget)
+            self.play_button.setEnabled(True)
+            self.play_button.setText("▶  Play")
             self.info_status.setText(
-                "Preview stream ready. Some platforms may require opening the original post in a browser."
+                "Preview stream prepared. Press Play to play it inside KyZer YouBe."
             )
         else:
+            self.player.setSource(QUrl())
             self.preview_stack.setCurrentWidget(self.preview_placeholder)
+            self.play_button.setEnabled(False)
+            self.info_status.setText(
+                "No direct preview stream is available for this post. Use Open on Platform."
+            )
+
 
     def _info_failed(self, message: str) -> None:
-        self.info_status.setText("Could not fetch video information.")
-        QMessageBox.critical(self, "Video info error", message)
+        get_app_logger().error("Get Video Info failed: %s", message)
+        self.info_status.setText("Could not fetch video information. Details saved to log.txt.")
+        QMessageBox.critical(
+            self, "Video info error",
+            message + "\n\nDiagnostic log: " + str(app_data_dir() / "log.txt")
+        )
 
     def toggle_playback(self) -> None:
-        if not self.player.source().isEmpty():
-            if self.player.playbackState() == QMediaPlayer.PlayingState:
-                self.player.pause()
-                self.play_button.setText("▶  Play")
-            else:
-                self.player.play()
-                self.play_button.setText("Ⅱ  Pause")
+        if self.player.source().isEmpty():
+            self.info_status.setText(
+                "This post did not provide a direct stream for in-app playback. "
+                "Use Open on Platform to watch it in your browser."
+            )
             return
-        self.open_source()
+
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.player.pause()
+            self.play_button.setText("▶  Play")
+            return
+
+        if self.player.mediaStatus() == QMediaPlayer.EndOfMedia:
+            self.player.setPosition(0)
+        self.preview_stack.setCurrentWidget(self.video_widget)
+        self.player.play()
+        self.play_button.setText("Ⅱ  Pause")
+
+    def _playback_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
+        self.play_button.setText(
+            "Ⅱ  Pause" if state == QMediaPlayer.PlayingState else "▶  Play"
+        )
 
     def open_source(self) -> None:
         url = self.url_edit.text().strip()
@@ -873,8 +1018,12 @@ class KyZerYouBe(QMainWindow):
 
     def _player_error(self, _error: QMediaPlayer.Error, error_string: str) -> None:
         if error_string:
-            self.info_status.setText("Embedded playback unavailable. Use Open on Platform.")
-            self.preview_stack.setCurrentWidget(self.preview_placeholder)
+            get_app_logger().warning("Embedded preview playback error: %s", error_string)
+            self.play_button.setText("▶  Play")
+            self.info_status.setText(
+                "This stream could not play in the embedded player: {}. "
+                "Use Open on Platform.".format(error_string)
+            )
 
     def _duration_changed(self, duration_ms: int) -> None:
         duration = max(0, duration_ms // 1000)
@@ -929,24 +1078,33 @@ class KyZerYouBe(QMainWindow):
             )
             return
 
+        download_video = self.video_check.isChecked()
+        download_audio = self.audio_check.isChecked()
+        if not download_video and not download_audio:
+            QMessageBox.warning(
+                self, APP_NAME, "Select Download Video, Download Audio, or both."
+            )
+            return
+
         output = self.output_edit.text().strip() or self.output_dir
         try:
             Path(output).expanduser().mkdir(parents=True, exist_ok=True)
         except OSError as exc:
+            get_app_logger().exception("Could not create download output folder")
             QMessageBox.critical(self, "Save folder error", str(exc))
             return
 
-        quality_text = self.quality_combo.currentText()
-        quality = {
+        video_quality = {
             "4K (2160p)": "2160p",
             "1440p": "1440p",
             "1080p": "1080p",
             "720p": "720p",
             "480p": "480p",
             "360p": "360p",
-            "MP3 audio": "audio",
-        }.get(quality_text, "best")
-        audio_only = quality == "audio"
+        }.get(self.quality_combo.currentText(), "best")
+        audio_quality = str(self.audio_quality_combo.currentData() or
+                            self.audio_quality_combo.currentText().split()[0])
+        browser = self.cookies_browser_combo.currentData()
 
         section = None
         if self.trim_check.isChecked():
@@ -967,20 +1125,33 @@ class KyZerYouBe(QMainWindow):
         self.progress_bar.setValue(0)
         self.percent_label.setText("0%")
         self._set_metrics("0 B", "Estimating…", "—", "—", "—")
+        media_names = []
+        if download_video:
+            media_names.append("video")
+        if download_audio:
+            media_names.append("audio")
         self.download_status.setText(
-            "Starting {} item(s) in the download queue…".format(len(urls))
+            "Starting {} item(s) ({})…".format(len(urls), " + ".join(media_names))
         )
         self.header_status.setText("●  DOWNLOAD IN PROGRESS")
 
+        get_app_logger().info(
+            "Starting queue: urls=%d video=%s audio=%s video_quality=%s audio_quality=%s subtitles=%s",
+            len(urls), download_video, download_audio, video_quality, audio_quality,
+            self.subtitles_check.isChecked() and download_video,
+        )
         self.download_worker = DownloadWorker(
             urls=urls,
             output_dir=output,
-            quality=quality,
-            audio_only=audio_only,
+            download_video=download_video,
+            download_audio=download_audio,
+            video_quality=video_quality,
+            audio_quality=audio_quality,
             subtitles=self.subtitles_check.isChecked(),
             thumbnail=self.thumbnail_check.isChecked(),
             playlist=self.playlist_check.isChecked(),
             section=section,
+            cookies_browser=browser,
         )
         self.download_worker.progress.connect(self._download_progress)
         self.download_worker.succeeded.connect(self._download_succeeded)
@@ -988,6 +1159,7 @@ class KyZerYouBe(QMainWindow):
         self.download_worker.cancelled.connect(self._download_cancelled)
         self.download_worker.finished.connect(self._download_thread_finished)
         self.download_worker.start()
+
 
     def _set_metrics(self, downloaded: str, total: str, remaining: str, speed: str, eta: str) -> None:
         self.downloaded_metric.setText(downloaded)
@@ -1003,8 +1175,9 @@ class KyZerYouBe(QMainWindow):
             "Queue {}/{}  •  ".format(queue_index, queue_total)
             if queue_index and queue_total and queue_total > 1 else ""
         )
+        media_prefix = "[{}]  ".format(data.get("media_kind", "MEDIA"))
         if data.get("status") == "processing":
-            self.download_status.setText(queue_prefix + "Download received — merging and processing…")
+            self.download_status.setText(queue_prefix + media_prefix + "Download received — merging and processing…")
         else:
             percent = int(max(0, min(100, float(data.get("percent") or 0))))
             self.progress_bar.setValue(percent)
@@ -1016,32 +1189,41 @@ class KyZerYouBe(QMainWindow):
                 data.get("speed_text", "—"),
                 data.get("eta_text", "—"),
             )
-            self.download_status.setText(queue_prefix + "Downloading media…")
+            self.download_status.setText(queue_prefix + media_prefix + "Downloading media…")
 
-    def _download_succeeded(self, paths: list[str]) -> None:
+    def _download_succeeded(self, results: list[dict[str, str]]) -> None:
         self.progress_bar.setValue(100)
         self.percent_label.setText("100%")
         self.download_status.setText(
-            "Completed {} download(s) successfully.".format(len(paths))
+            "Completed {} file(s) successfully.".format(len(results))
         )
-        for index, path in enumerate(paths):
+        for result in results:
+            path = str(result.get("path") or "")
+            source_url = str(result.get("url") or self.url_edit.text().strip())
             title = Path(path).name
-            if len(paths) == 1 and self.info:
+            if self.info and source_url == self.info.get("webpage_url"):
                 title = str(self.info.get("title") or title)
-            source_url = self.queue_urls[index] if index < len(self.queue_urls) else self.url_edit.text().strip()
-            self._save_history(str(title), path, source_url)
+            kind = str(result.get("kind") or "MEDIA").title()
+            if kind == "Audio":
+                title = "{} (Audio)".format(title)
+            self._save_history(title, path, source_url)
 
         self.queue_urls.clear()
         self.queue_list.clear()
         self.queue_list.setVisible(False)
         self.queue_count_label.setText("Queue: 0")
         QMessageBox.information(
-            self, APP_NAME, "Completed {} download(s) successfully.".format(len(paths))
+            self, APP_NAME, "Completed {} file(s) successfully.".format(len(results))
         )
 
+
     def _download_failed(self, message: str) -> None:
-        self.download_status.setText("Download failed.")
-        QMessageBox.critical(self, "Download error", message)
+        get_app_logger().error("Download failed: %s", message)
+        self.download_status.setText("Download failed. Details saved to log.txt.")
+        QMessageBox.critical(
+            self, "Download error",
+            message + "\n\nDiagnostic log: " + str(app_data_dir() / "log.txt")
+        )
 
     def _download_cancelled(self) -> None:
         self.download_status.setText("Download cancelled.")
@@ -1059,6 +1241,107 @@ class KyZerYouBe(QMainWindow):
             self.download_worker.cancel()
             self.cancel_button.setEnabled(False)
 
+    def _detect_whatsapp_desktop(self, auto_scan: bool = False) -> None:
+        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        candidates = [
+            local / "Programs" / "WhatsApp" / "WhatsApp.exe",
+            local / "WhatsApp" / "WhatsApp.exe",
+            roaming / "WhatsApp" / "WhatsApp.exe",
+            Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "WindowsApps",
+        ]
+        executable = next(
+            (path for path in candidates if path.is_file() and path.name.lower() == "whatsapp.exe"),
+            None,
+        )
+
+        package_root = local / "Packages"
+        packages = []
+        if package_root.is_dir():
+            try:
+                packages = [
+                    p for p in package_root.iterdir()
+                    if p.is_dir() and "whatsappdesktop" in p.name.lower()
+                ]
+            except OSError:
+                packages = []
+        installed = bool(executable or packages)
+
+        status_candidates = [
+            local / "WhatsApp" / "Media" / ".Statuses",
+            roaming / "WhatsApp" / "Media" / ".Statuses",
+            Path.home() / "Documents" / "WhatsApp" / "Media" / ".Statuses",
+        ]
+        for package in packages:
+            status_candidates.extend([
+                package / "LocalState" / "shared" / ".Statuses",
+                package / "LocalState" / "shared" / "Statuses",
+                package / "LocalCache" / "Roaming" / "WhatsApp" / "Media" / ".Statuses",
+            ])
+        detected_folder = next((p for p in status_candidates if p.is_dir()), None)
+
+        self.whatsapp_installed = installed
+        if not installed:
+            self.whatsapp_status_label.setText(
+                "✕ WhatsApp Desktop was NOT detected on this PC. Install WhatsApp for PC "
+                "to enable this section."
+            )
+            self.whatsapp_status_label.setStyleSheet(
+                "color:#ff7786; font-size:11px; font-weight:700; padding-top:5px;"
+            )
+            self.open_whatsapp_button.setEnabled(False)
+            self.install_whatsapp_button.setVisible(True)
+            self.status_folder_edit.setEnabled(False)
+            self.browse_status_button.setEnabled(False)
+            self.scan_status_button.setEnabled(False)
+            self.save_status_button.setEnabled(False)
+            self.status_list.clear()
+            self.status_count.setText("0 items")
+            return
+
+        self.whatsapp_status_label.setText(
+            "✓ WhatsApp Desktop detected on this PC."
+            + (
+                " A local status-media folder was found."
+                if detected_folder else
+                " No public .Statuses folder is exposed by this desktop installation; "
+                "you can still select a folder exported to this PC."
+            )
+        )
+        self.whatsapp_status_label.setStyleSheet(
+            "color:#45d49a; font-size:11px; font-weight:700; padding-top:5px;"
+        )
+        self.open_whatsapp_button.setEnabled(True)
+        self.install_whatsapp_button.setVisible(False)
+        self.status_folder_edit.setEnabled(True)
+        self.browse_status_button.setEnabled(True)
+        self.scan_status_button.setEnabled(True)
+        self.save_status_button.setEnabled(True)
+        if detected_folder and auto_scan:
+            self.status_folder_edit.setText(str(detected_folder))
+            self.scan_status_folder()
+
+    def open_whatsapp_desktop(self) -> None:
+        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        candidates = [
+            local / "Programs" / "WhatsApp" / "WhatsApp.exe",
+            local / "WhatsApp" / "WhatsApp.exe",
+        ]
+        executable = next((p for p in candidates if p.is_file()), None)
+        if executable:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(executable)))
+        else:
+            QDesktopServices.openUrl(QUrl("whatsapp://"))
+
+    def get_whatsapp_desktop(self) -> None:
+        QDesktopServices.openUrl(QUrl("https://www.whatsapp.com/download"))
+
+    def open_log_file(self) -> None:
+        log_path = app_data_dir() / "log.txt"
+        if not log_path.exists():
+            get_app_logger().info("Log opened by user")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path)))
+
     def browse_status_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
             self, "Select copied WhatsApp .Statuses folder",
@@ -1068,6 +1351,11 @@ class KyZerYouBe(QMainWindow):
             self.status_folder_edit.setText(folder)
 
     def scan_status_folder(self) -> None:
+        if not self.whatsapp_installed:
+            QMessageBox.information(
+                self, APP_NAME, "You need WhatsApp Desktop installed on this PC first."
+            )
+            return
         folder = Path(self.status_folder_edit.text().strip()).expanduser()
         if not folder.is_dir():
             QMessageBox.warning(self, APP_NAME, "Choose a valid local status media folder.")
@@ -1093,6 +1381,11 @@ class KyZerYouBe(QMainWindow):
         return format_bytes(size)
 
     def save_selected_status(self) -> None:
+        if not self.whatsapp_installed:
+            QMessageBox.information(
+                self, APP_NAME, "You need WhatsApp Desktop installed on this PC first."
+            )
+            return
         item = self.status_list.currentItem()
         if not item:
             QMessageBox.information(self, APP_NAME, "Select a status photo or video first.")
@@ -1171,6 +1464,11 @@ class KyZerYouBe(QMainWindow):
             return
         self.output_dir = folder
         self.output_edit.setText(folder)
+        self.cookies_browser = self.cookies_browser_combo.currentData()
+        get_app_logger().info(
+            "Settings saved: download_folder=%s browser_cookies=%s",
+            folder, self.cookies_browser or "off",
+        )
         QMessageBox.information(self, APP_NAME, "Settings saved.")
 
     def closeEvent(self, event: Any) -> None:
@@ -1189,6 +1487,7 @@ class KyZerYouBe(QMainWindow):
 
 
 def main() -> None:
+    get_app_logger().info("KyZer YouBe starting")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("KyZer_HADOC")
