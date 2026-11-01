@@ -1,0 +1,80 @@
+name: Build KyZer Downloader for Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Validate Python files
+        run: python -m compileall -q gui.py downloader.py
+
+      - name: Build standalone Windows executable
+        run: >-
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name "KyZer Downloader"
+          --collect-all yt_dlp
+          gui.py
+
+      - name: Package executable
+        run: |
+          New-Item -ItemType Directory -Force -Path release-package | Out-Null
+          Copy-Item "dist/KyZer Downloader.exe" "release-package/KyZer Downloader.exe"
+          @"
+          KyZer Downloader
+
+          Run: KyZer Downloader.exe
+          FFmpeg is required for MP3 conversion and recommended for merging
+          separate video and audio streams. Install FFmpeg and add it to PATH.
+          "@ | Set-Content -Encoding utf8 release-package/README.txt
+          Compress-Archive -Path release-package/* -DestinationPath "KyZer-Downloader-Windows.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KyZer-Downloader-Windows
+          path: |
+            dist/KyZer Downloader.exe
+            KyZer-Downloader-Windows.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish latest Windows build
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: KyZer Downloader - Latest Windows Build
+          prerelease: true
+          make_latest: true
+          overwrite_files: true
+          files: |
+            dist/KyZer Downloader.exe
+            KyZer-Downloader-Windows.zip
+          body: |
+            Latest automatically built Windows version of KyZer Downloader.
+
+            Download the EXE for a portable single-file app, or the ZIP for the app plus README.
+            FFmpeg is not bundled. Install it separately for MP3 conversion and merging separate video/audio streams.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
