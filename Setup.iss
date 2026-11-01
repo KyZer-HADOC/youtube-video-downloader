@@ -1,6 +1,6 @@
 ; KyZer YouBe per-user installer
 #define MyAppName "KyZer YouBe"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "KyZer_HADOC"
 #define MyAppExeName "KyZer YouBe.exe"
 
@@ -25,7 +25,7 @@ ArchitecturesInstallIn64BitMode=x64
 CloseApplications=yes
 RestartApplications=no
 Uninstallable=yes
-VersionInfoVersion=2.0.0.0
+VersionInfoVersion=2.0.1.0
 VersionInfoProductName=KyZer YouBe
 VersionInfoCompany=KyZer_HADOC
 VersionInfoDescription=KyZer YouBe Windows Installer
