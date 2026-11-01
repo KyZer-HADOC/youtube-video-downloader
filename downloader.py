@@ -82,6 +82,42 @@ def _browser_cookie_option(browser: str | None) -> dict[str, Any]:
     return {"cookiesfrombrowser": (name,)}
 
 
+def _log_tiktok_impersonation_status() -> None:
+    """Record whether curl_cffi browser impersonation is available for TikTok."""
+    try:
+        import curl_cffi
+        version = getattr(curl_cffi, "__version__", "available")
+        get_app_logger().info(
+            "TikTok browser impersonation support available: curl_cffi=%s", version
+        )
+    except Exception as exc:
+        get_app_logger().warning(
+            "TikTok browser impersonation support is unavailable: %s", exc
+        )
+
+
+def is_tiktok_challenge_error(error: object) -> bool:
+    """Identify the short anti-bot/challenge-page failures reported by yt-dlp."""
+    message = str(error).lower()
+    return any(marker in message for marker in (
+        "unexpected response from webpage request",
+        "unable to extract challenge data",
+        "unable to extract universal data for rehydration",
+    ))
+
+
+def _tiktok_challenge_message(error: object) -> str:
+    return (
+        "TikTok returned a short anti-bot/challenge page instead of video data. "
+        "Update to the latest KyZer YouBe build, open the post in your browser, "
+        "and make sure it plays there. Then open Settings > Browser Session, "
+        "select that same browser, and retry. If it still fails, TikTok may be "
+        "temporarily blocking this network/IP, or the post may require login. "
+        "Try again later or on another network.\n\nTechnical details: "
+        + str(error)
+    )
+
+
 def detect_platform(url: str) -> str:
     """Return the supported platform name, or 'Unsupported'."""
     try:
@@ -217,6 +253,8 @@ class YouTubeDownloader:
             "Fetching video information: platform=%s url=%s browser_cookies=%s",
             platform, _safe_url_label(url), cookies_browser or "off",
         )
+        if platform == "TikTok":
+            _log_tiktok_impersonation_status()
         options: dict[str, Any] = {
             "quiet": True,
             "no_warnings": False,
@@ -250,6 +288,8 @@ class YouTubeDownloader:
                 platform, _safe_url_label(url),
             )
             message = str(exc)
+            if platform == "TikTok" and is_tiktok_challenge_error(message):
+                raise RuntimeError(_tiktok_challenge_message(message)) from exc
             if "429" in message or "Too Many Requests" in message:
                 raise RuntimeError(
                     "The platform is rate-limiting requests (HTTP 429). Wait a while and retry. "
@@ -512,15 +552,19 @@ class YouTubeDownloader:
             platform, _safe_url_label(url), audio_only,
             download_subtitles, cookies_browser or "off",
         )
+        if platform == "TikTok":
+            _log_tiktok_impersonation_status()
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
                 result = ydl.download([url])
         except DownloadCancelled:
             raise
-        except Exception:
+        except Exception as exc:
             get_app_logger().exception(
                 "Download failed: platform=%s url=%s", detect_platform(url), _safe_url_label(url)
             )
+            if platform == "TikTok" and is_tiktok_challenge_error(exc):
+                raise RuntimeError(_tiktok_challenge_message(exc)) from exc
             raise
 
         if cancel_event is not None and cancel_event.is_set():
